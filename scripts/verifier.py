@@ -242,8 +242,11 @@ def setup():
     tools = WORK / 'tools'
     command(['sudo', 'apt-get', 'update'], 'apt-update')
     command(['sudo', 'apt-get', 'install', '-y', 'bubblewrap', 'build-essential', 'pkg-config', 'libssl-dev', 'apparmor'], 'apt-tools')
-    # GitHub images can have the packaged profile present but not loaded.
-    # Load Ubuntu's policy for bwrap; keep global userns restrictions enabled.
+    # GitHub images may remove package-owned AppArmor configuration files.
+    # Restore missing distro files, then load only bwrap's packaged policy.
+    command(['sudo', 'apt-get', 'install', '-y', '--reinstall',
+             '-o', 'Dpkg::Options::=--force-confmiss', 'apparmor'], 'restore-apparmor-policy')
+    # Keep global userns restrictions enabled.
     command(['sudo', 'apparmor_parser', '-r', '/etc/apparmor.d/bwrap-userns-restrict'],
             'bwrap-apparmor-policy')
     # Only preinstalled SDKs on this disposable GitHub VM; never user/source paths.
