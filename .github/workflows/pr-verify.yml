@@ -1,0 +1,83 @@
+name: Verify submission PR
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+# Shared with issue-route caller jobs. One active and at most one pending
+# request per account; no credentials or submitted code in intake.
+concurrency:
+  group: bos-submitter-${{ github.event.pull_request.user.login }}
+  cancel-in-progress: false
+jobs:
+  intake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: bos-pr-intake
+      cancel-in-progress: false
+    outputs:
+      ready: ${{ steps.intake.outputs.ready }}
+      slot: ${{ steps.intake.outputs.slot }}
+    steps:
+      - name: Check out only the trusted base controller
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - id: intake
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/pr_submissions.py select_pr
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: pr-input-${{ github.run_id }}-${{ github.run_attempt }}
+          path: pr-request.json
+          if-no-files-found: error
+          retention-days: 90
+  verify:
+    needs: intake
+    if: needs.intake.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    concurrency:
+      group: bos-proof-slot-${{ needs.intake.outputs.slot }}
+      cancel-in-progress: false
+    env:
+      BOS_REQUEST_PATH: pr-request.json
+      BOS_VERIFIER_COMMIT: ${{ github.event.pull_request.base.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: pr-input-${{ github.run_id }}-${{ github.run_attempt }}
+          path: pr-input
+      - id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/pr_submissions.py preflight_pr
+      - if: steps.gate.outputs.proceed == 'true'
+        run: python3 -m unittest discover -s tests -v
+      - if: steps.gate.outputs.proceed == 'true'
+        run: python3 scripts/verifier.py prepare
+      - if: steps.gate.outputs.proceed == 'true'
+        timeout-minutes: 45
+        run: python3 scripts/verifier.py setup
+      - if: steps.gate.outputs.proceed == 'true'
+        continue-on-error: true
+        run: python3 scripts/verifier.py verify
+      - if: always()
+        run: python3 scripts/verifier.py finalize
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: pr-verification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90

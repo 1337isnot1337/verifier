@@ -6,10 +6,9 @@ on:
     - cron: '17,47 * * * *'
   workflow_dispatch:
 permissions: {}
-# One batch holds at most ten concurrent proof/report branches. The manual
-# verifier shares this lock, so other batches cannot exceed the global cap.
+# One issue batch at a time; shared execution slots cap both submission routes.
 concurrency:
-  group: public-lean-verifier
+  group: bos-issue-batch
   cancel-in-progress: false
 jobs:
   select:
@@ -38,6 +37,9 @@ jobs:
           path: requests/
           retention-days: 90
   check:
+    concurrency:
+      group: bos-submitter-${{ matrix.login }}
+      cancel-in-progress: false
     needs: select
     if: needs.select.outputs.selected == 'true'
     strategy:
@@ -51,3 +53,4 @@ jobs:
     uses: ./.github/workflows/submission-check.yml
     with:
       issue_number: ${{ matrix.issue_number }}
+      slot: ${{ matrix.slot }}

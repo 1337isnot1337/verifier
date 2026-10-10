@@ -1,6 +1,8 @@
 # Fixed targets
 
-The default entry point is `Submission.lean`, with theorem `Race.bound`.
+The entry point is `Submission.lean`, with theorem `Race.bound`. For a PR,
+this file lives in its new submissions folder; for an issue, at the source
+repository root. The verifier stages the chosen folder as the project root.
 Extra modules must be below `Submission/`; import them with `Submission.Name`.
 Copy needed proof sources there and update their import paths. The verifier
 supplies pinned Mathlib, Lean, and build files. It does not use submitted Lake

@@ -7,14 +7,21 @@ An open submission without a passing check appears as **Claimed**.
 
 ## Submit
 
-1. Put `Submission.lean` in a public GitHub repository. Export `Race.bound`.
-   Put extra Lean files under `Submission/`. Use the target and Lean version
-   in [the problem guide](docs/targets.md). Keep all author and source credits.
-2. Commit the proof. Copy the complete 40-character commit SHA.
-3. [Open a submission issue](https://github.com/bigospeedrun/verifier/issues/new/choose).
-   Use the form to select the problem and enter the repository URL, full commit
-   SHA, and reduced exact rational bound. The parser accepts only these four
-   structured fields.
+Choose either route. Both use the same statement, record gate, and proof checks.
+
+- **Pull request:** add a new folder under
+  `submissions/<problem>/<github-login>-<short-name>/` in this repository.
+  Include `Submission.lean`, any extra Lean files under `Submission/`, and
+  `manifest.json` containing only `{"problem":"3sum","bound":"1999/1000"}`
+  with the problem and bound changed to match the proof. Open a PR that adds
+  only that folder. Export `Race.bound` and keep source credits in the Lean files.
+- **Issue:** keep the proof in a public repository and
+  [open a submission issue](https://github.com/bigospeedrun/verifier/issues/new/choose).
+  The form takes the problem, repository URL, complete commit SHA, and reduced
+  exact rational bound. Put `Submission.lean` at that repository's root and
+  extra Lean files under `Submission/`.
+
+See [the problem guide](docs/targets.md) for the exact target and Lean version.
 
 Use `dft`, `3sum`, or `apsp` for `problem`. Use an exact nonnegative rational
 for `bound`. For DFT, the bound is the saving s in O(n (log n)^(1-s)); a larger
@@ -24,10 +31,15 @@ is better. The ranges are 0 ≤ s ≤ 1, 0 ≤ r ≤ 2 for 3SUM, and 0 ≤ r ≤
 The verifier checks up to ten submissions in parallel, with one queued run
 per GitHub account. A run starts only if the bound matches or beats the current record;
 otherwise, the bot replies that the submission is listed as Claimed.
-The verifier posts the result and a receipt link on the issue. Edit the form
-fields to submit a different commit or bound. A failed or incomplete Lean
-check gives no verified badge. A timeout is not a proof that the claim is
-false. Close an issue to withdraw an open claim.
+The bot posts a receipt on the issue or PR. For PRs, a Lean pass causes an
+automatic merge. A real Lean or axiom failure, or a real nanoda rejection,
+causes an automatic close. A timeout, resource limit, or infrastructure failure
+leaves the PR open with a review label and a maintainer mention. A below-record
+PR stays open as Claimed. New PR commits start a new check.
+
+Before merging, the bot checks that the PR adds only its own new submission
+folder and that its head is the verified commit. An unsafe diff or changed
+head is closed with a reason. A check does not transfer another author's credit.
 
 ## What Lean Verified means
 
@@ -53,5 +65,6 @@ with the source. See [NOTICE](NOTICE).
 
 Proofs run offline on fresh standard GitHub runners, with fixed dependencies,
 resource limits, and no access to the token that posts results.
-See [security and layout](docs/direct-submissions.md),
+See [issue security and layout](docs/direct-submissions.md),
+[PR security and receipt contract](docs/pr-submissions.md),
 [execution details](docs/execution.md), and [AGENTS.md](AGENTS.md).

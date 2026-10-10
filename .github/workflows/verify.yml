@@ -31,7 +31,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: public-lean-verifier
+  group: bos-proof-slot-0
   cancel-in-progress: false
 jobs:
   verify:

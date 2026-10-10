@@ -2,9 +2,10 @@
 
 ## Repository choice and input
 
-Use submission issues in `bigospeedrun/verifier`. One repository owns the
-statement, workflow, receipt, and discussion. This needs no new repository,
-source merge, or fork workflow execution. All changes remain local.
+Use issues or proof-file PRs in `bigospeedrun/verifier`. One repository owns the
+statement, workflow, receipt, and discussion. This document describes the issue
+route. See [PR submissions](pr-submissions.md) for the second route and its
+version 2 receipt contract. All changes remain local.
 
 The issue form has exactly four fields, in this order: Problem, Repository
 URL, Commit SHA, Bound. `scripts/submissions.py` accepts only the exact generated
@@ -40,13 +41,13 @@ A lower-ranked bound or an already verified tie receives a bot reply and remains
 checks the board and unchanged issue body again immediately before compilation.
 If either changed, no Lean run starts and the result remains Claimed.
 
-One active batch contains at most ten reusable workflow branches. Each branch
-has a read-only proof job and then a separate report job. Matrix parallelism is
-ten. The parent workflow lock excludes another batch or the existing manual
-verifier, so the repository has at most ten active proof/report branches. The
-proofs run in parallel on standard runners. Each batch selects at most one
-pending request per authenticated issue submitter login, compared without case.
-Additional submissions from that account remain Claimed for a later scan.
+Issue batches select at most ten requests and one per authenticated login.
+Both routes share account concurrency keys and ten deterministic proof slots.
+The manual verifier also uses one of these slots. Thus at most ten proof/report
+jobs run together on standard runners; hash collisions can reduce utilization.
+Each account has at most one active and one queued request across both routes.
+Additional issue submissions remain Claimed for a later scan. See the PR design
+for the shared slot keys and cancellation handling.
 
 The schedule rescans open issues. A processed marker binds both the normalized
 submission hash and raw issue body hash. Only the GitHub Actions bot's marker

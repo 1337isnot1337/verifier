@@ -192,7 +192,7 @@ rev = "d13f23b723b8a846827a245b89c10fc7d3f11612"
 def prepare():
     ART.mkdir(exist_ok=True)
     data = {'schema_version': 1, 'started_unix': time.time(), 'status': 'preparing',
-            'verifier_commit': os.environ.get('GITHUB_SHA'),
+            'verifier_commit': os.environ.get('BOS_VERIFIER_COMMIT', os.environ.get('GITHUB_SHA')),
             'run_url': f"https://github.com/{os.environ.get('GITHUB_REPOSITORY', '')}/actions/runs/{os.environ.get('GITHUB_RUN_ID', '')}",
             'steps': [], 'kernels': {'lean': {'status': 'not_started'}, 'nanoda': {'status': 'not_started'}},
             'axiom_audit': {'status': 'not_started'}}
@@ -214,13 +214,19 @@ def prepare():
         if not entry:
             continue
         meta, rawpath = entry.split(b'\t', 1); mode = meta.split()[0]
-        rel = Path(rawpath.decode('utf-8'))
+        source_rel = Path(rawpath.decode('utf-8'))
+        rel = source_rel
+        if request.get('source_subdir'):
+            try:
+                rel = source_rel.relative_to(request['source_subdir'])
+            except ValueError:
+                continue
         if not rel.parts or rel.parts[0].removesuffix('.lean') not in profile['source_roots'] or rel.suffix != '.lean':
             continue
         module = '.'.join(rel.with_suffix('').parts)
         if mode != b'100644' or not NAME.fullmatch(module):
             raise ValueError('only regular Lean source files with ordinary module names are admitted')
-        source = WORK / 'clone' / rel
+        source = WORK / 'clone' / source_rel
         if source.stat().st_size > 20_000_000:
             raise ValueError('individual Lean source exceeds 20 MB')
         total += source.stat().st_size

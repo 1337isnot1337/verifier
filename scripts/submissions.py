@@ -28,7 +28,7 @@ def submission_hash(value):
 
 
 def validate_submission(value):
-    if not isinstance(value, dict) or not FIELDS <= set(value) or set(value) - FIELDS - {'entrypoint'} or type(value['schema_version']) is not int or value['schema_version'] != 1:
+    if not isinstance(value, dict) or not FIELDS <= set(value) or set(value) - FIELDS - {'entrypoint', 'source_subdir'} or type(value['schema_version']) is not int or value['schema_version'] != 1:
         raise ValueError('Expected schema_version, problem, bound, repo_url, commit, authors only')
     profiles = json.loads((ROOT / 'profiles/direct.json').read_text())
     if not isinstance(value['problem'], str) or value['problem'] not in profiles:
@@ -47,6 +47,10 @@ def validate_submission(value):
         raise ValueError('Unknown entrypoint')
     if entrypoint == 'dft233' and (value['problem'] != 'dft' or bound != Fraction('7547360/10000000000')):
         raise ValueError('dft233 supports only its fixed DFT saving')
+    if 'source_subdir' in value and not re.fullmatch(r'submissions/(dft|3sum|apsp)/[a-z0-9][a-z0-9-]{0,79}', value['source_subdir']):
+        raise ValueError('Invalid PR source folder')
+    if 'source_subdir' in value and value['source_subdir'].split('/')[1] != value['problem']:
+        raise ValueError('PR source folder problem mismatch')
     authors = value['authors']
     if not isinstance(authors, list) or not 0 <= len(authors) <= 30 or any(not isinstance(x, str) or not x.strip() or len(x) > 120 or any(ord(c) < 32 for c in x) for x in authors):
         raise ValueError('authors must contain 1 to 30 names, at most 120 characters each')
@@ -100,8 +104,11 @@ def resolve_request(request):
 def make_request(submission):
     submission = validate_submission(submission)
     profile = selected_profile(submission)
-    return {'direct_submission': submission, 'repo_url': submission['repo_url'], 'commit': submission['commit'],
+    request = {'direct_submission': submission, 'repo_url': submission['repo_url'], 'commit': submission['commit'],
             'challenge_file': profile['challenge_file'], 'theorem_names': ','.join(profile['theorem_names']), 'lean_toolchain': profile['lean_toolchain']}
+    if 'source_subdir' in submission:
+        request['source_subdir'] = submission['source_subdir']
+    return request
 
 
 def challenge_source(submission):
@@ -229,6 +236,10 @@ def qualifies_for_run(submission, record):
     return candidate > current if submission['problem'] == 'dft' else candidate < current
 
 
+def execution_slot(login):
+    return int(hashlib.sha256(login.lower().encode()).hexdigest(), 16) % 10
+
+
 def select():
     """One active batch, ten parallel branches, one pending request per login."""
     selected, authors = [], set()
@@ -262,7 +273,7 @@ def select():
         authors.add(login)
         request['record_gate'] = record
         Path(f"requests/{issue['number']}.json").write_text(canonical(request) + '\n')
-        selected.append({'issue_number': issue['number']})
+        selected.append({'issue_number': issue['number'], 'login': login, 'slot': execution_slot(login)})
     with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
         out.write('selected=' + ('true' if selected else 'false') + '\n')
         out.write('matrix=' + canonical({'include': selected}) + '\n')

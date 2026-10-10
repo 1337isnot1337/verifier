@@ -5,9 +5,15 @@ on:
       issue_number:
         required: true
         type: number
+      slot:
+        required: true
+        type: number
 permissions: {}
 jobs:
   verify:
+    concurrency:
+      group: bos-proof-slot-${{ inputs.slot }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 350
     permissions:
@@ -49,6 +55,9 @@ jobs:
           if-no-files-found: error
           retention-days: 90
   report:
+    concurrency:
+      group: bos-proof-slot-${{ inputs.slot }}
+      cancel-in-progress: false
     needs: verify
     if: always()
     runs-on: ubuntu-latest

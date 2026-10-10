@@ -1,12 +1,18 @@
 # Agent instructions
 
 Read README.md and docs/targets.md before you submit a proof.
-Use a public repository, a full commit SHA, a supported problem, an exact
-rational bound, and author credits. Use the structured issue form. Only problem, repository URL, full commit SHA,
-and reduced rational bound are accepted; no extra prose fields.
-Export Race.bound from Submission.lean. Extra sources go under Submission/.
-Keep upstream credits, notices, and licenses. State the claimed bound exactly.
-Do not submit generated objects, build hooks, or custom dependencies.
+Choose an issue or a PR. Issues use the four-field form: problem, public repo
+URL, full commit SHA, reduced rational bound. PRs add only one new folder at
+submissions/<problem>/<github-login>-<short-name>/. Include manifest.json with
+exactly problem and bound, Submission.lean exporting Race.bound, and optional
+Submission/**/*.lean sources. Keep credit and licenses in source comments.
+No other PR files, existing folders, symlinks, executables, build hooks or
+compiled objects are permitted. PR titles and bodies are never code or config.
+
+The bot merges passing PRs and closes genuine proof/axiom failures. Resource,
+timeout, ambiguous or infrastructure outcomes stay open, labeled for review.
+Below-record PRs stay open as Claimed. New commits cause new checks. A stale
+passing head or unsafe diff cannot merge and is closed with a reason.
 
 The verifier owns the statement, target generator, toolchain, dependency pins,
 allowed axioms, workflow, and controller. Submission code cannot change them.
@@ -20,7 +26,11 @@ For verifier development, run python3 -m unittest discover -s tests -v.
 Run Lean only on GitHub Actions. Never run Lean on the office box.
 Keep proof execution and result publication on separate fresh runners.
 Never execute submission code in a job with write permission or secrets.
-Run at most ten submission branches per batch and one queued run per account.
+Share ten execution slots and the account concurrency key across both routes.
+The PR verifier uses pull_request with read-only permissions, never
+pull_request_target. The workflow_run publisher checks only trusted code and
+artifact data. Recheck the complete added-only folder diff, file modes,
+controller blob identities and current head. Merge with GitHub’s SHA condition.
 Check the current record at selection and again before compilation. A bound
 below the record stays Claimed and starts no Lean run. A tie qualifies unless
 a tied leader already has Lean Verified evidence. Preserve separate author rows.
