@@ -73,7 +73,11 @@ It is an operation-count theorem, not a bit-complexity claim.
   outputs are removed inside the sandbox before each Comparator call so an
   earlier submission build cannot replace the statement used for comparison.
 - One workflow runs at a time. New modules compile in dependency order using
-  four Lean threads, nice 10, a 4-CPU quota, a 14 GiB cgroup maximum and no swap.
+  four Lean threads, nice 10, a 4-CPU quota and a 14 GiB RAM cgroup maximum. Builds and the first Lean
+  check have no swap. The nanoda phase gets 16 GiB of swap on the disposable VM
+  because Comparator retains its parsed proof while the external kernel runs.
+  The swap file is outside the submission mounts; receipts record sampled swap
+  use separately. This uses the standard free public runner.
   There is no soft memory limit that would force prolonged reclaim.
 - The job timeout is **350 minutes**. Verification stops at a 320-minute total
   deadline, leaving time to save artifacts. Tool setup has a 45-minute limit.

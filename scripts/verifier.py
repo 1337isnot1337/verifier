@@ -337,6 +337,19 @@ def sandbox_args(config_write=False):
     return args
 
 
+def prepare_nanoda_swap():
+    # Comparator retains its parsed proof while its external kernel runs.
+    # Swap lets those idle pages leave RAM on the standard hosted runner.
+    # This file is outside every submission mount and exists only on the VM.
+    swap = WORK / 'nanoda.swap'
+    if shutil.disk_usage(WORK).free < 20 * 1024**3:
+        raise RuntimeError('nanoda swap needs at least 20 GiB free disk')
+    command(['sudo', 'fallocate', '-l', '16G', swap], 'nanoda-swap-allocate')
+    command(['sudo', 'chmod', '600', swap], 'nanoda-swap-permissions')
+    command(['sudo', 'mkswap', swap], 'nanoda-swap-format')
+    command(['sudo', 'swapon', swap], 'nanoda-swap-enable')
+
+
 def verify():
     # Probe real namespace separation and read-only mounts before loading submission code.
     probe = '''import os, pathlib, sys
@@ -365,21 +378,26 @@ print('Network/process namespaces, credential visibility, and read-only mounts p
         data = receipt()
         if time.time() >= deadline:
             data['status'] = 'timeout'; save(data); return
+        if kernel == 'nanoda':
+            prepare_nanoda_swap()
+        swap_limit = 16 * 1024**3 if kernel == 'nanoda' else 0
         unit = 'bos-verifier-' + kernel
         remaining = max(1, int(deadline - time.time()))
         command_args = sandbox_args() + ['/usr/bin/python3', str(WORK / 'control/inside.py'), str(WORK), kernel]
         args = ['sudo', 'systemd-run', '--wait', '--pipe', '--collect', '--unit=' + unit,
                 '--uid=' + str(os.getuid()), '--gid=' + str(os.getgid()),
                 '--property=RestrictAddressFamilies=~AF_UNIX', '--property=Nice=10',
-                '--property=CPUQuota=400%', '--property=MemoryMax=14G', '--property=MemorySwapMax=0',
+                '--property=CPUQuota=400%', '--property=MemoryMax=14G', '--property=MemorySwapMax=' + str(swap_limit),
                 '--property=RuntimeMaxSec=' + str(remaining), '--property=TasksMax=512', *command_args]
         print(f'{kernel}: isolated check started', flush=True)
-        start, peak, guard_stop = time.monotonic(), 0, None
+        start, peak, swap_peak, guard_stop = time.monotonic(), 0, 0, None
         with (ART / f'{kernel}.log').open('w') as log:
             proc = subprocess.Popen(args, stdout=log, stderr=subprocess.STDOUT)
             while proc.poll() is None:
                 memory = Path('/sys/fs/cgroup/system.slice') / (unit + '.service') / 'memory.peak'
                 try: peak = max(peak, int(memory.read_text()))
+                except (FileNotFoundError, ValueError): pass
+                try: swap_peak = max(swap_peak, int(memory.with_name('memory.swap.current').read_text()))
                 except (FileNotFoundError, ValueError): pass
                 if shutil.disk_usage(WORK).free < 1024**3:
                     guard_stop = 'disk space below 1 GiB'
@@ -389,6 +407,7 @@ print('Network/process namespaces, credential visibility, and read-only mounts p
         record = {'status': 'passed' if code == 0 else 'not_completed_or_rejected',
                   'exit_code': code, 'wall_seconds': round(time.monotonic() - start, 3),
                   'sampled_peak_cgroup_bytes': peak, 'memory_limit_bytes': 14 * 1024**3,
+                  'sampled_peak_swap_bytes': swap_peak, 'swap_limit_bytes': swap_limit,
                   'guard_stop': guard_stop, 'log': kernel + '.log'}
         text = (ART / f'{kernel}.log').read_text(errors='replace')
         if kernel != 'audit':
