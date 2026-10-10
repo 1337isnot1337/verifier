@@ -1,0 +1,11 @@
+{
+  "test_only": true,
+  "date": "2026-10-10",
+  "stage": "prepare",
+  "status": "prepared",
+  "commit": "837dc3130adc79f7b7ab4ddd56c15576bbd766b0",
+  "source_file_count": 396,
+  "generated_challenge_sha256": "3a646acd3ac9cf6ff93e29cc363dbfea0c8953a2e1415f7965bd86e8b2ee62a3",
+  "build_chain_count": 82,
+  "lean_executed": false
+}

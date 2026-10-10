@@ -1,0 +1,32 @@
+name: Lean proof submission
+description: Submit a pinned proof for a bound that matches or beats the current record
+title: '[Lean submission] '
+body:
+  - type: dropdown
+    id: problem
+    attributes:
+      label: Problem
+      options: [dft, 3sum, apsp]
+    validations:
+      required: true
+  - type: input
+    id: repository
+    attributes:
+      label: Repository URL
+      placeholder: https://github.com/OWNER/REPO
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: Commit SHA
+      placeholder: Full 40-character lowercase commit SHA
+    validations:
+      required: true
+  - type: input
+    id: bound
+    attributes:
+      label: Bound
+      placeholder: Reduced exact rational, such as 1999/1000
+    validations:
+      required: true

@@ -9,7 +9,7 @@ work = Path(sys.argv[1])
 phase = sys.argv[2]
 request = json.loads((work / 'control/request.json').read_text())
 stage = work / 'stage'
-lean = work / 'tools/elan/toolchains/leanprover--lean4---v4.34.1/bin/lake'
+lean = work / 'tools/elan/toolchains' / request['request']['lean_toolchain'].replace('/', '--').replace(':', '---') / 'bin/lake'
 if phase.endswith('-exec'):
     # `lake env` prepends its toolchain bin to PATH. Restore the reviewed
     # adapter only after Lake has supplied LEAN_PATH and other package paths.

@@ -13,6 +13,8 @@ import sys
 import threading
 import time
 import urllib.parse
+from datetime import datetime, timezone
+from verdicts import kernel_outcome
 
 ROOT = Path(__file__).resolve().parents[1]
 ART = ROOT / 'artifacts'
@@ -66,6 +68,10 @@ def validate_request(request):
         raise ValueError('repo_url must be a public https://github.com/OWNER/REPO URL')
     if not SHA.fullmatch(request['commit']):
         raise ValueError('commit must be a complete lowercase 40-digit Git SHA')
+    if 'direct_submission' in request:
+        from submissions import resolve_request
+        profile, names = resolve_request(request)
+        return profile, names
     profile = None
     for p in sorted((ROOT / 'profiles').glob('*.json')):
         candidate = json.loads(p.read_text())
@@ -131,11 +137,12 @@ def plan_sources(stage, root):
         deps = set()
         for line in strip_comments(path.read_text()).splitlines():
             s = line.strip()
-            if not s or s == 'prelude':
+            if not s or s in ['prelude', 'module']:
                 continue
-            if not s.startswith('import '):
+            header = re.fullmatch(r'(?:(?:public|private|meta)\s+)*import\s+(.+)', s)
+            if not header:
                 break
-            imports = s[7:].split()
+            imports = header[1].split()
             if not imports or any(not NAME.fullmatch(n) for n in imports):
                 raise ValueError('unsupported import header')
             for name in imports:
@@ -162,7 +169,7 @@ def plan_sources(stage, root):
     return chains
 
 
-def lakefile(roots):
+def lakefile(roots, manifest_file='profiles/lake-manifest.json'):
     result = '''name = "Verifier"
 version = "0.1.0"
 [leanOptions]
@@ -172,6 +179,9 @@ name = "mathlib"
 git = "https://github.com/leanprover-community/mathlib4.git"
 rev = "d13f23b723b8a846827a245b89c10fc7d3f11612"
 '''
+    manifest = json.loads((ROOT / manifest_file).read_text())
+    mathlib = next(p for p in manifest['packages'] if p['name'] == 'mathlib')
+    result = result.replace('d13f23b723b8a846827a245b89c10fc7d3f11612', mathlib['rev'])
     for name in roots:
         if not NAME.fullmatch(name):
             raise ValueError('invalid library name')
@@ -187,7 +197,8 @@ def prepare():
             'steps': [], 'kernels': {'lean': {'status': 'not_started'}, 'nanoda': {'status': 'not_started'}},
             'axiom_audit': {'status': 'not_started'}}
     save(data)
-    event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
+    request_path = os.environ.get('BOS_REQUEST_PATH')
+    event = json.loads(Path(request_path or os.environ['GITHUB_EVENT_PATH']).read_text())
     request = event['inputs']
     profile, names = validate_request(request)
     WORK.mkdir(parents=True, exist_ok=False)
@@ -204,7 +215,7 @@ def prepare():
             continue
         meta, rawpath = entry.split(b'\t', 1); mode = meta.split()[0]
         rel = Path(rawpath.decode('utf-8'))
-        if not rel.parts or rel.parts[0] not in profile['source_roots'] or rel.suffix != '.lean':
+        if not rel.parts or rel.parts[0].removesuffix('.lean') not in profile['source_roots'] or rel.suffix != '.lean':
             continue
         module = '.'.join(rel.with_suffix('').parts)
         if mode != b'100644' or not NAME.fullmatch(module):
@@ -221,12 +232,17 @@ def prepare():
     chains = plan_sources(stage, profile['solution_module'])
     write_json(WORK / 'control/chains.json', chains)
     (WORK / 'control/chain-targets.txt').write_text(''.join(chain[-1] + '\n' for chain in chains))
-    shutil.copyfile(ROOT / profile['challenge_file'], stage / 'VerifierChallenge.lean')
+    if 'direct_submission' in request:
+        from submissions import challenge_source
+        (stage / 'VerifierChallenge.lean').write_text(challenge_source(request['direct_submission']))
+    else:
+        shutil.copyfile(ROOT / profile['challenge_file'], stage / 'VerifierChallenge.lean')
+    data = receipt(); data['generated_challenge_sha256'] = digest(stage / 'VerifierChallenge.lean'); save(data)
     (stage / 'VerifierAudit.lean').write_text('import ' + profile['solution_module'] + '\n' +
                                            ''.join('#print axioms ' + n + '\n' for n in names))
-    (stage / 'lakefile.toml').write_text(lakefile(profile['source_roots'] + ['VerifierChallenge', 'VerifierAudit']))
+    (stage / 'lakefile.toml').write_text(lakefile(profile['source_roots'] + ['VerifierChallenge', 'VerifierAudit'], profile.get('manifest_file', 'profiles/lake-manifest.json')))
     (stage / 'lean-toolchain').write_text(request['lean_toolchain'] + '\n')
-    shutil.copyfile(ROOT / 'profiles/lake-manifest.json', stage / 'lake-manifest.json')
+    shutil.copyfile(ROOT / profile.get('manifest_file', 'profiles/lake-manifest.json'), stage / 'lake-manifest.json')
     (stage / '.lake/build').mkdir(parents=True); (stage / '.lake/packages').mkdir()
     (stage / '.lake/config').mkdir()
     (WORK / 'scratch').mkdir()
@@ -238,7 +254,8 @@ def prepare():
 
 
 def setup():
-    pins = json.loads((ROOT / 'profiles/tools.json').read_text())
+    profile = json.loads((WORK / 'control/request.json').read_text())['profile']
+    pins = json.loads((ROOT / profile.get('tools_file', 'profiles/tools.json')).read_text())
     request = json.loads((WORK / 'control/request.json').read_text())['request']
     tools = WORK / 'tools'
     command(['sudo', 'apt-get', 'update'], 'apt-update')
@@ -258,7 +275,7 @@ def setup():
     env = dict(os.environ, ELAN_HOME=str(tools / 'elan'), LEAN_NUM_THREADS='4')
     command([tools / 'elan-init', '-y', '--no-modify-path', '--default-toolchain', 'none'], 'elan-install', env=env)
     command([tools / 'elan/bin/elan', 'toolchain', 'install', request['lean_toolchain']], 'lean-install', env=env)
-    lean = tools / 'elan/toolchains/leanprover--lean4---v4.34.1/bin'
+    lean = toolchain_dir() / 'bin'
     if not (lean / 'lean').is_file():
         raise ValueError('reviewed toolchain layout is unavailable')
     env['PATH'] = str(lean) + ':' + env['PATH']
@@ -274,9 +291,9 @@ def setup():
     clone('https://github.com/Zouuup/landrun.git', pins['landrun'], tools / 'landrun', 'tool-landrun')
     command(['go', 'build', '-o', str(tools / 'landrun/landrun'), 'cmd/landrun/main.go'], 'build-landrun', tools / 'landrun', env)
     cache = WORK / 'cache'; cache.mkdir()
-    (cache / 'lakefile.toml').write_text(lakefile([]))
+    (cache / 'lakefile.toml').write_text(lakefile([], profile.get('manifest_file', 'profiles/lake-manifest.json')))
     (cache / 'lean-toolchain').write_text(request['lean_toolchain'] + '\n')
-    shutil.copyfile(ROOT / 'profiles/lake-manifest.json', cache / 'lake-manifest.json')
+    shutil.copyfile(ROOT / profile.get('manifest_file', 'profiles/lake-manifest.json'), cache / 'lake-manifest.json')
     packages = cache / '.lake/packages'; packages.mkdir(parents=True)
     for item in json.loads((cache / 'lake-manifest.json').read_text())['packages']:
         clone(item['url'], item['rev'], packages / item['name'], 'dependency-' + item['name'])
@@ -313,9 +330,14 @@ def setup():
     data = receipt(); data['tool_pins'] = pins; data['status'] = 'tools_ready'; save(data)
 
 
+def toolchain_dir():
+    request = json.loads((WORK / 'control/request.json').read_text())['request']
+    return WORK / 'tools/elan/toolchains' / request['lean_toolchain'].replace('/', '--').replace(':', '---')
+
+
 def sandbox_args(config_write=False):
     tools, stage, control = WORK / 'tools', WORK / 'stage', WORK / 'control'
-    lean = tools / 'elan/toolchains/leanprover--lean4---v4.34.1'
+    lean = toolchain_dir()
     args = ['/usr/bin/bwrap', '--unshare-all', '--die-with-parent', '--new-session',
             '--ro-bind', '/usr', '/usr', '--symlink', 'usr/bin', '/bin',
             '--symlink', 'usr/lib', '/lib', '--symlink', 'usr/lib64', '/lib64',
@@ -377,14 +399,17 @@ print('Network/process namespaces, credential visibility, and read-only mounts p
     for kernel in ['lean', 'audit', 'nanoda']:
         data = receipt()
         if time.time() >= deadline:
-            data['status'] = 'timeout'; save(data); return
+            data['status'] = 'timeout'
+            if kernel == 'nanoda':
+                data['kernels']['nanoda'] = {'status': 'incomplete', 'reason': 'total_deadline'}
+            save(data); return
         if kernel == 'nanoda':
             prepare_nanoda_swap()
         swap_limit = 16 * 1024**3 if kernel == 'nanoda' else 0
         unit = 'bos-verifier-' + kernel
         remaining = max(1, int(deadline - time.time()))
         command_args = sandbox_args() + ['/usr/bin/python3', str(WORK / 'control/inside.py'), str(WORK), kernel]
-        args = ['sudo', 'systemd-run', '--wait', '--pipe', '--collect', '--unit=' + unit,
+        args = ['sudo', 'systemd-run', '--wait', '--pipe', '--unit=' + unit,
                 '--uid=' + str(os.getuid()), '--gid=' + str(os.getgid()),
                 '--property=RestrictAddressFamilies=~AF_UNIX', '--property=Nice=10',
                 '--property=CPUQuota=400%', '--property=MemoryMax=14G', '--property=MemorySwapMax=' + str(swap_limit),
@@ -404,16 +429,16 @@ print('Network/process namespaces, credential visibility, and read-only mounts p
                     subprocess.run(['sudo', 'systemctl', 'stop', unit], check=False, stdout=log, stderr=log)
                 time.sleep(1)
             code = proc.wait()
-        record = {'status': 'passed' if code == 0 else 'not_completed_or_rejected',
+        systemd_result = subprocess.run(['sudo', 'systemctl', 'show', unit, '--property=Result', '--value'],
+                                         capture_output=True, text=True, check=False).stdout.strip()
+        record = {'systemd_result': systemd_result, 'status': 'passed' if code == 0 else 'not_completed_or_rejected',
                   'exit_code': code, 'wall_seconds': round(time.monotonic() - start, 3),
                   'sampled_peak_cgroup_bytes': peak, 'memory_limit_bytes': 14 * 1024**3,
                   'sampled_peak_swap_bytes': swap_peak, 'swap_limit_bytes': swap_limit,
                   'guard_stop': guard_stop, 'log': kernel + '.log'}
         text = (ART / f'{kernel}.log').read_text(errors='replace')
         if kernel != 'audit':
-            required = ['Lean default kernel accepts the solution', 'Your solution is okay!']
-            if kernel == 'nanoda': required += ['nanoda kernel accepts the solution']
-            if code == 0 and not all(line in text for line in required): record['status'] = 'invalid_output'
+            record.update(kernel_outcome(kernel, code, text, systemd_result, guard_stop))
             data = receipt(); data['kernels'][kernel] = record
         else:
             reported = {}
@@ -428,7 +453,7 @@ print('Network/process namespaces, credential visibility, and read-only mounts p
         save(data)
         print(f'{kernel}: {record["status"]}', flush=True)
         # A failed check never admits a theorem. Still try the independent audit.
-        if guard_stop or 'oom-kill' in text or 'Result: timeout' in text:
+        if guard_stop or systemd_result in ['oom-kill', 'timeout']:
             break
     data = receipt()
     data['status'] = ('passed' if all(v['status'] == 'passed' for v in data['kernels'].values())
@@ -441,6 +466,7 @@ def finalize():
     if not (ART / 'receipt.json').exists():
         save({'schema_version': 1, 'status': 'setup_failed', 'steps': [], 'kernels': {}})
     data = receipt(); data['finished_unix'] = time.time()
+    data['checked_at'] = datetime.fromtimestamp(data['finished_unix'], timezone.utc).isoformat().replace('+00:00', 'Z')
     if data.get('status') not in ['passed', 'not_verified', 'timeout']:
         data['status'] = 'setup_failed'
     data['total_wall_seconds'] = round(data['finished_unix'] - data.get('started_unix', data['finished_unix']), 3)

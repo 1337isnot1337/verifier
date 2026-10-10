@@ -1,0 +1,53 @@
+name: Verify direct submissions
+on:
+  issues:
+    types: [opened, edited, reopened]
+  schedule:
+    - cron: '17,47 * * * *'
+  workflow_dispatch:
+permissions: {}
+# One batch holds at most ten concurrent proof/report branches. The manual
+# verifier shares this lock, so other batches cannot exceed the global cap.
+concurrency:
+  group: public-lean-verifier
+  cancel-in-progress: false
+jobs:
+  select:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+    outputs:
+      selected: ${{ steps.select.outputs.selected }}
+      matrix: ${{ steps.select.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - id: select
+        name: Select up to ten record challenges from distinct accounts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/submissions.py select
+      - if: steps.select.outputs.selected == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: direct-requests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: requests/
+          retention-days: 90
+  check:
+    needs: select
+    if: needs.select.outputs.selected == 'true'
+    strategy:
+      fail-fast: false
+      max-parallel: 10
+      matrix: ${{ fromJSON(needs.select.outputs.matrix) }}
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    uses: ./.github/workflows/submission-check.yml
+    with:
+      issue_number: ${{ matrix.issue_number }}

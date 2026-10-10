@@ -11,3 +11,11 @@ The first tested submission is Chafik Boukhalfa's PR #2 to Jacob Sussman's
 wht-power-saving-lean repository. Its source is fetched at an immutable commit
 and is not vendored as the trusted challenge. Its authors and community
 predecessors retain their credit and license notices.
+
+The unchanged 3SUM and APSP statement in challenges/3sum-apsp/EndStatement.lean
+comes from anthropics/formal-math at e1a4e6508154ea59f030480661590a9fe3018011,
+3sum-apsp/EndStatement.lean (Apache-2.0). Anthropic wrote the formalization;
+Josh Alman and Virginia Vassilevska Williams wrote the paper. The upstream
+LICENSE and NOTICE remain next to that statement. Direct submission parsing,
+exact rational target generation, and issue result publication are independent
+Big O Speedrun additions dated 2026-10-10.
