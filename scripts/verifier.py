@@ -241,14 +241,11 @@ def setup():
     request = json.loads((WORK / 'control/request.json').read_text())['request']
     tools = WORK / 'tools'
     command(['sudo', 'apt-get', 'update'], 'apt-update')
-    command(['sudo', 'apt-get', 'install', '-y', 'bubblewrap', 'build-essential', 'pkg-config', 'libssl-dev', 'apparmor'], 'apt-tools')
-    # GitHub images may remove package-owned AppArmor configuration files.
-    # Restore missing distro files, then load only bwrap's packaged policy.
-    command(['sudo', 'apt-get', 'install', '-y', '--reinstall',
-             '-o', 'Dpkg::Options::=--force-confmiss', 'apparmor'], 'restore-apparmor-policy')
-    # Keep global userns restrictions enabled.
-    command(['sudo', 'apparmor_parser', '-r', '/etc/apparmor.d/bwrap-userns-restrict'],
-            'bwrap-apparmor-policy')
+    command(['sudo', 'apt-get', 'install', '-y', 'bubblewrap', 'build-essential', 'pkg-config', 'libssl-dev', 'apparmor', 'apparmor-profiles'], 'apt-tools')
+    # Ubuntu ships the bwrap policy in the optional profiles package.
+    # Load its exact packaged file; keep global userns restrictions enabled.
+    command(['sudo', 'apparmor_parser', '-r',
+             '/usr/share/apparmor/extra-profiles/bwrap-userns-restrict'], 'bwrap-apparmor-policy')
     # Only preinstalled SDKs on this disposable GitHub VM; never user/source paths.
     command(['sudo', 'rm', '-rf', '--', '/usr/share/dotnet', '/usr/local/lib/android', '/opt/ghc',
              '/usr/local/.ghcup'], 'runner-sdk-space')
