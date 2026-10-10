@@ -10,6 +10,16 @@ phase = sys.argv[2]
 request = json.loads((work / 'control/request.json').read_text())
 stage = work / 'stage'
 lean = work / 'tools/elan/toolchains/leanprover--lean4---v4.34.1/bin/lake'
+if phase.endswith('-exec'):
+    # `lake env` prepends its toolchain bin to PATH. Restore the reviewed
+    # adapter only after Lake has supplied LEAN_PATH and other package paths.
+    kernel = phase.removesuffix('-exec')
+    if kernel not in ['lean', 'nanoda']:
+        raise ValueError('invalid kernel phase')
+    env = dict(os.environ, LEAN_NUM_THREADS='4')
+    env['PATH'] = str(work / 'control/bin') + ':' + env['PATH']
+    comparator = work / 'tools/comparator/.lake/build/bin/comparator'
+    os.execve(str(comparator), [str(comparator), str(work / f'control/{kernel}.json')], env)
 if phase == 'audit':
     args = [str(lean), 'env', 'lean', str(stage / 'VerifierAudit.lean')]
 else:
@@ -23,6 +33,6 @@ else:
                 if path.is_dir() and not path.is_symlink():
                     raise RuntimeError('unexpected challenge output directory')
                 path.unlink()
-    args = [str(lean), 'env', str(work / 'tools/comparator/.lake/build/bin/comparator'),
-            str(work / f'control/{phase}.json')]
+    args = [str(lean), 'env', '/usr/bin/python3', str(work / 'control/inside.py'),
+            str(work), phase + '-exec']
 os.execve(str(lean), args, dict(os.environ, LEAN_NUM_THREADS='4'))
