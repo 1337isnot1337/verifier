@@ -4,6 +4,7 @@
   "importable": false,
   "merge_commit": "dddddddddddddddddddddddddddddddddddddddd",
   "publisher_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "publisher_run_attempt": "2",
   "publisher_run_id": "456",
   "reason": "lean_and_axiom_passed",
   "receipt": {
@@ -78,11 +79,12 @@
     "verifier_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
   },
   "receipt_artifact": {
-    "digest": "sha256:620d6eefdbc89040cb57db8f7408d1d281278775f410b057d2dddcacb044c874",
+    "digest": "sha256:351dc3dd3000c2da2f817d96d1f1f201e9bf8756c3411960f11bf4725316e298",
     "id": 99,
     "name": "pr-verification-123-1",
     "url": "https://github.com/bigospeedrun/verifier/actions/runs/123/artifacts/99"
   },
+  "receipt_sha256": "d5bd2ca4555f65d03602e092f4be52fcf62a0d0d994993e726937ff2e73fe82e",
   "request": {
     "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "changed_files": [

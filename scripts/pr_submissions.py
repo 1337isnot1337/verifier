@@ -396,6 +396,8 @@ def publish_pr():
         'workflow_path': WORKFLOW, 'workflow_conclusion': run['conclusion'],
         'receipt_artifact': {'id': artifact['id'], 'name': artifact['name'], 'digest': artifact['digest'], 'url': url},
         'publisher_commit': os.environ['GITHUB_SHA'], 'publisher_run_id': os.environ['GITHUB_RUN_ID'],
+        'publisher_run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+        'receipt_sha256': digest(files['receipt.json']) if 'receipt.json' in files else None,
         'disposition': disposition, 'reason': reason, 'merge_commit': None}
     comment = f'PR proof result: **{disposition}**. {reason}.\n\n[Receipt and logs]({url})'
     if disposition == 'close' and receipt and receipt.get('kernels', {}).get('nanoda', {}).get('status') == 'rejected':
@@ -440,6 +442,8 @@ def missing_artifact_review(run):
     Path('published/pr-submission.json').write_text(s.canonical({'schema_version': 2, 'route': 'pull_request',
         'importable': False, 'test_only': False, 'run_id': str(run['id']),
         'run_attempt': str(run['run_attempt']), 'disposition': 'keep_open',
+        'publisher_commit': os.environ['GITHUB_SHA'], 'publisher_run_id': os.environ['GITHUB_RUN_ID'],
+        'publisher_run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'receipt_sha256': None,
         'reason': 'Missing proof artifact; infrastructure review required'}) + '\n')
 
 

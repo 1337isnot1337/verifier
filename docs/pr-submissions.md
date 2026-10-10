@@ -83,7 +83,8 @@ rejection. First-time fork contributors may also need GitHub's own workflow appr
 ## PR receipt contract for the site
 
 Issue envelopes retain schema version 1. PR publication emits schema version 2 in
-`pr-submission-VERIFICATION_RUN_ID-ATTEMPT`, containing `pr-submission.json`.
+`pr-submission-VERIFICATION_RUN_ID-ATTEMPT-publisher-PUBLISHER_RUN_ID-PUBLISHER_ATTEMPT`,
+containing `pr-submission.json`.
 The publisher workflow's own run ID identifies where that artifact lives.
 
 - `schema_version: 2`, `route: pull_request`, `test_only: false`.
@@ -106,7 +107,12 @@ The publisher workflow's own run ID identifies where that artifact lives.
   `verifier_commit` identify the read-only verification run.
 - `receipt_artifact`: API ID, name, digest, and public URL for
   `pr-verification-RUN-ATTEMPT` (or the non-proof `pr-input-RUN-ATTEMPT` fallback).
-- `publisher_commit` and `publisher_run_id` identify the trusted publisher.
+- `receipt_sha256`: SHA-256 of the raw `receipt.json` artifact bytes, before JSON
+  parsing or normalization; null when no receipt exists.
+- `publisher_commit`, `publisher_run_id`, and `publisher_run_attempt` identify the
+  trusted publisher revision and exact attempt. Run IDs and attempts are strings.
+  The importer binds these to the publisher API run/attempt and artifact name.
+  Source verification run/attempt fields retain their existing meaning.
 - `disposition: merge|close|keep_open|claimed_only`, `reason`, `merge_commit`.
   `importable` is true only after a successful merge. A declined merge changes it
   to false and preserves an open review state.
@@ -119,7 +125,8 @@ Open below-record/unverified PRs are Claimed. Closed-unmerged failures stay off
 the board. Equal-bound passes create a separate row with their own proof credit.
 Never enable a fixture or an unreviewed verifier/publisher revision.
 `tests/fixtures/direct/pr-envelope.json` is a synthetic, explicitly non-importable
-example; both it and its request carry `test_only: true`.
+example; both it and its request carry `test_only: true`. Its raw synthetic receipt
+bytes are in `tests/fixtures/direct/pr-receipt.json` so the receipt hash is testable.
 
 ## Local validation limits
 

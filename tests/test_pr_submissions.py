@@ -40,7 +40,7 @@ class PRTests(unittest.TestCase):
 
     def receipt(self):
         request=self.request()
-        return {'schema_version':1,'request':request['inputs'],'profile':s.selected_profile(request['submission']),
+        return {'schema_version':1,'checked_at':'2026-10-10T12:00:00Z','request':request['inputs'],'profile':s.selected_profile(request['submission']),
                 'theorem_names':['Race.bound'],'theorems':{'Race.bound':{'lean_kernel':'passed','nanoda_kernel':'passed','reported_axioms':['propext']}},
                 'kernels':{'lean':{'status':'passed'},'nanoda':{'status':'passed'}},
                 'axiom_audit':{'status':'passed','exit_code':0,'reported_axioms':{'Race.bound':['propext']}},
@@ -132,10 +132,11 @@ class PRTests(unittest.TestCase):
                 with self.assertRaises(ValueError):p.validate_run(dict(run,**{key:value}),self.request(),self.pr)
             with self.assertRaises(ValueError):p.validate_run(run,dict(self.request(),test_only=True),self.pr)
 
-    def publish_fixture(self, mutate_pr=None, unsafe=False, conclusion='success'):
+    def publish_fixture(self, mutate_pr=None, unsafe=False, conclusion='success', omit_receipt=False, publisher_attempt='2'):
         request=self.request();receipt=self.receipt();buf=io.BytesIO()
         with zipfile.ZipFile(buf,'w') as z:
-            z.writestr('pr-request.json',json.dumps(request));z.writestr('receipt.json',json.dumps(receipt))
+            z.writestr('pr-request.json',json.dumps(request))
+            if not omit_receipt:z.writestr('receipt.json',json.dumps(receipt))
         raw=buf.getvalue();calls=[]
         pr=copy.deepcopy(self.pr)
         if mutate_pr:mutate_pr(pr)
@@ -154,7 +155,7 @@ class PRTests(unittest.TestCase):
             old=Path.cwd();os.chdir(tmp)
             try:
                 event=Path('event.json');event.write_text(json.dumps({'workflow_run':{'id':123,'run_attempt':1}}))
-                with patch.dict(os.environ,GITHUB_EVENT_PATH=str(event),GITHUB_SHA='b'*40,GITHUB_RUN_ID='456'),patch.object(p,'api',side_effect=api),patch.object(p,'inspect_pr',return_value=dict(request,head_sha=pr['head']['sha'])),patch.object(p,'validate_controller',side_effect=p.LayoutError('protected workflow changed') if unsafe else None):
+                with patch.dict(os.environ,GITHUB_EVENT_PATH=str(event),GITHUB_SHA='b'*40,GITHUB_RUN_ID='456',GITHUB_RUN_ATTEMPT=publisher_attempt),patch.object(p,'api',side_effect=api),patch.object(p,'inspect_pr',return_value=dict(request,head_sha=pr['head']['sha'])),patch.object(p,'validate_controller',side_effect=p.LayoutError('protected workflow changed') if unsafe else None):
                     p.publish_pr()
                 result=json.loads(Path('published/pr-submission.json').read_text())
                 return result,calls
@@ -165,6 +166,27 @@ class PRTests(unittest.TestCase):
         self.assertEqual(result['disposition'],'merge');self.assertEqual(result['merge_commit'],'d'*40)
         merge=[c for c in calls if c[0].endswith('/merge')][0]
         self.assertEqual(merge[1]['sha'],'a'*40);self.assertEqual(merge[2],'PUT')
+
+    def test_publisher_attempt_and_raw_receipt_hash(self):
+        for attempt in ['1','2']:
+            result,_=self.publish_fixture(publisher_attempt=attempt)
+            self.assertEqual(result['publisher_run_attempt'],attempt)
+            self.assertEqual(result['receipt_sha256'],p.digest(json.dumps(self.receipt()).encode()))
+            self.assertNotEqual(result['receipt_sha256'],p.digest(s.canonical(self.receipt()).encode()))
+            self.assertEqual((result['run_id'],result['run_attempt']),('123','1'))
+        result,_=self.publish_fixture(omit_receipt=True)
+        self.assertIsNone(result['receipt_sha256'])
+        self.assertFalse(result['importable'])
+
+    def test_committed_pr_fixture_raw_receipt_binding(self):
+        fixture=ROOT/'tests/fixtures/direct'
+        envelope=json.loads((fixture/'pr-envelope.json').read_text())
+        raw=(fixture/'pr-receipt.json').read_bytes()
+        self.assertEqual(envelope['receipt_sha256'],p.digest(raw))
+        self.assertEqual(envelope['receipt'],json.loads(raw))
+        self.assertTrue(envelope['test_only'])
+        self.assertTrue(envelope['request']['test_only'])
+        self.assertFalse(envelope['importable'])
 
     def test_publication_recovery_after_merge_does_not_merge_twice(self):
         result,calls=self.publish_fixture(mutate_pr=lambda pr:pr.update(state='closed',merged=True,merge_commit_sha='d'*40))
