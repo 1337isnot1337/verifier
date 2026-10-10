@@ -228,6 +228,7 @@ def prepare():
     (stage / 'lean-toolchain').write_text(request['lean_toolchain'] + '\n')
     shutil.copyfile(ROOT / 'profiles/lake-manifest.json', stage / 'lake-manifest.json')
     (stage / '.lake/build').mkdir(parents=True); (stage / '.lake/packages').mkdir()
+    (stage / '.lake/config').mkdir()
     (WORK / 'scratch').mkdir()
     for kernel in ['lean', 'nanoda']:
         write_json(WORK / f'control/{kernel}.json', {'challenge_module': 'VerifierChallenge',
@@ -305,10 +306,14 @@ def setup():
                 'lean4export': exporter / '.lake/build/bin/lean4export',
                 'nanoda': tools / 'nanoda/target/release/nanoda_bin', 'landrun': tools / 'landrun/landrun'}
     write_json(ART / 'tool-sha256.json', {name: digest(path) for name, path in binaries.items()})
+    # Compile only our Lake configuration before making its cache immutable.
+    # `lean --version` elaborates no submission source. This stays offline.
+    command(sandbox_args(config_write=True) + [str(lean / 'lake'), 'env', 'lean', '--version'],
+            'trusted-lake-config')
     data = receipt(); data['tool_pins'] = pins; data['status'] = 'tools_ready'; save(data)
 
 
-def sandbox_args():
+def sandbox_args(config_write=False):
     tools, stage, control = WORK / 'tools', WORK / 'stage', WORK / 'control'
     lean = tools / 'elan/toolchains/leanprover--lean4---v4.34.1'
     args = ['/usr/bin/bwrap', '--unshare-all', '--die-with-parent', '--new-session',
@@ -320,6 +325,8 @@ def sandbox_args():
             '--ro-bind', str(WORK / 'cache/.lake/packages'), str(stage / '.lake/packages'),
             '--ro-bind', str(tools), str(tools), '--ro-bind', str(control), str(control),
             '--bind', str(WORK / 'scratch'), '/tmp', '--chdir', str(stage), '--clearenv']
+    if config_write:
+        args += ['--bind', str(stage / '.lake/config'), str(stage / '.lake/config')]
     if Path('/etc/alternatives/which').exists():
         args += ['--ro-bind', '/etc/alternatives/which', '/etc/alternatives/which']
     env = {'PATH': f'{control}/bin:{lean}/bin:/usr/bin:/bin', 'HOME': '/tmp', 'TMPDIR': '/tmp',
