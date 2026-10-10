@@ -38,8 +38,8 @@ leaves the PR open with a review label and a maintainer mention. A below-record
 PR stays open as Claimed. New PR commits start a new check.
 
 Before merging, the bot checks that the PR adds only its own new submission
-folder and that its head is the verified commit. An unsafe diff or changed
-head is closed with a reason. A check does not transfer another author's credit.
+folder and that its head is the verified commit. An unsafe diff is closed with a reason.
+If the head changed, the bot skips the merge and leaves the PR open for the new check. A check does not transfer another author's credit.
 
 ## What Lean Verified means
 

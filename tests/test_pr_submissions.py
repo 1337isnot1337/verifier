@@ -194,12 +194,18 @@ class PRTests(unittest.TestCase):
         self.assertEqual(result['merge_commit'],'d'*40)
         self.assertEqual(calls,[])
 
-    def test_changed_head_or_protected_controller_never_merges(self):
-        for args in [{'mutate_pr':lambda pr:pr['head'].update(sha='e'*40)},{'unsafe':True}]:
-            result,calls=self.publish_fixture(**args)
-            self.assertEqual(result['disposition'],'close')
-            self.assertFalse(any(c[0].endswith('/merge') for c in calls))
-            self.assertTrue(any(c[2]=='PATCH' and c[1]=={'state':'closed'} for c in calls))
+    def test_changed_head_stays_open_for_new_check(self):
+        # Even an incompatible new manifest/diff belongs to the newer run.
+        result,calls=self.publish_fixture(mutate_pr=lambda pr:pr['head'].update(sha='e'*40),unsafe=True)
+        self.assertEqual(result['disposition'],'keep_open')
+        self.assertFalse(result['importable'])
+        self.assertFalse(any(c[0].endswith('/merge') or c[2]=='PATCH' or c[0].endswith('/labels') for c in calls))
+
+    def test_unsafe_controller_at_verified_head_closes(self):
+        result,calls=self.publish_fixture(unsafe=True)
+        self.assertEqual(result['disposition'],'close')
+        self.assertFalse(any(c[0].endswith('/merge') for c in calls))
+        self.assertTrue(any(c[2]=='PATCH' and c[1]=={'state':'closed'} for c in calls))
 
     def test_cancelled_run_stays_open_labeled(self):
         result,calls=self.publish_fixture(conclusion='cancelled')

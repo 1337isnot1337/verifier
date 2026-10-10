@@ -29,6 +29,10 @@ class LayoutError(ValueError):
     pass
 
 
+class SupersededHead(ValueError):
+    pass
+
+
 def api(path, data=None, method=None, raw=False):
     req = urllib.request.Request('https://api.github.com/repos/' + s.REPOSITORY + '/' + path,
         data=None if data is None else json.dumps(data).encode(), method=method,
@@ -249,10 +253,10 @@ def select_pr():
 def preflight_pr():
     selected = json.loads(Path('pr-input/pr-request.json').read_text())
     pr = api(f"pulls/{selected['pr_number']}")
-    current = inspect_pr(pr, selected['manifest_utf8'].encode())
-    if pr['state'] != 'open' or current['head_sha'] != selected['head_sha']:
+    if pr['state'] != 'open' or pr['head']['sha'] != selected['head_sha']:
         selected.update(gate='superseded', reason='PR changed before compilation')
     else:
+        inspect_pr(pr, selected['manifest_utf8'].encode())
         record = s.current_record(selected['submission']['problem'], selected['pr_url'])
         selected['record_gate'] = record
         if not s.qualifies_for_run(selected['submission'], record):
@@ -364,7 +368,11 @@ def publish_pr():
     receipt = json.loads(files['receipt.json']) if 'receipt.json' in files else None
     url = f"https://github.com/{s.REPOSITORY}/actions/runs/{run_id}/artifacts/{artifact['id']}"
     disposition, reason = 'keep_open', 'Result needs review'
+    superseded = False
     try:
+        # An old run must not judge the new head against the old manifest.
+        if pr['head']['sha'] != request['head_sha']:
+            raise SupersededHead('A newer commit has its own check; this result will not merge or close the PR')
         # Always re-read the entire live diff before making a merge decision.
         inspected = pr
         if recovering_merge:
@@ -373,8 +381,6 @@ def publish_pr():
             inspected = dict(pr, base=dict(pr['base'], sha=request['base_sha']))
         checked = inspect_pr(inspected, request.get('manifest_utf8', '').encode())
         validate_controller(checked['head_sha'], request['verifier_commit'])
-        if pr['head']['sha'] != request['head_sha']:
-            raise LayoutError('PR head no longer equals the verified head')
         for field in ['submission', 'submission_sha256', 'source_subdir', 'manifest_sha256', 'changed_files_sha256']:
             if checked[field] != request.get(field):
                 raise LayoutError('PR source/manifest changed since verification')
@@ -385,6 +391,9 @@ def publish_pr():
                 if path not in files or digest(files[path]) != expected:
                     raise ValueError('Receipt log hash mismatch')
         disposition, reason = outcome(receipt, request, run['conclusion'])
+    except SupersededHead as exc:
+        superseded = True
+        disposition, reason = 'keep_open', str(exc)
     except LayoutError as exc:
         disposition, reason = 'close', str(exc)
     except ValueError as exc:
@@ -419,10 +428,14 @@ def publish_pr():
             envelope['merge_commit'] = result['sha']
         except (urllib.error.HTTPError, ValueError):
             envelope.update(disposition='keep_open', reason='Merge declined or head changed; review required', importable=False)
-            label_review(number)
+            current = api(f'pulls/{number}')
+            if current['head']['sha'] != request['head_sha']:
+                envelope['reason'] = 'A newer commit has its own check; merge skipped'
+            else:
+                label_review(number)
     elif disposition == 'close' and not recovering_merge:
         api(f'pulls/{number}', {'state': 'closed'}, method='PATCH')
-    elif disposition == 'keep_open' and not recovering_merge:
+    elif disposition == 'keep_open' and not recovering_merge and not superseded:
         label_review(number)
     Path('published').mkdir(exist_ok=True)
     Path('published/pr-submission.json').write_text(s.canonical(envelope) + '\n')

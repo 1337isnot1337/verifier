@@ -54,7 +54,9 @@ and Git trees. It checks the new login-owned folder, added-only paths, regular f
 modes, immutable blob identities, manifest hash, full file-list hash, and protected
 controller/workflow bytes. The manifest bytes come from the artifact and must match
 the PR's Git blob SHA. Proof sources are not read or run in this write-capable job.
-An unsafe diff or head different from the checked SHA is closed with a reason.
+An unsafe diff at the checked head is closed with a reason. If the head changed,
+the old result skips merge and leaves the PR open for the new commit’s check,
+without a review label. This check precedes comparison with the old manifest.
 The merge API also receives `sha: verified_head_sha`, which closes the race between
 that check and merge. If GitHub declines, the PR stays open for review.
 

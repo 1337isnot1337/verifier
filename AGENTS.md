@@ -11,8 +11,8 @@ compiled objects are permitted. PR titles and bodies are never code or config.
 
 The bot merges passing PRs and closes genuine proof/axiom failures. Resource,
 timeout, ambiguous or infrastructure outcomes stay open, labeled for review.
-Below-record PRs stay open as Claimed. New commits cause new checks. A stale
-passing head or unsafe diff cannot merge and is closed with a reason.
+Below-record PRs stay open as Claimed. New commits cause new checks. An unsafe
+diff closes with a reason. A changed head skips merge and stays open for its new check.
 
 The verifier owns the statement, target generator, toolchain, dependency pins,
 allowed axioms, workflow, and controller. Submission code cannot change them.
