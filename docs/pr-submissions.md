@@ -106,13 +106,14 @@ open for review. A crash after reservation but before dispatch fails closed:
 it does not erase the reservation or automatically spend proof capacity again.
 A changed issue request or new PR head has its own admission identity.
 
-Before deployment, set repository Actions fork approval to
-`all_external_contributors` (the strictest policy). This applies to fork-owned
+On 2026-10-10, Lead authorized setting repository Actions fork approval to
+`all_external_contributors` (the strictest policy). The setting was applied and
+an independent API read-back confirmed it. Recheck this prerequisite at deployment. This applies to fork-owned
 PR YAML and does not block trusted schedule/issue/default-branch dispatch runs.
 Never approve fork workflow YAML to submit a proof; the scheduler reads the
 proof files itself. See GitHub’s [fork approval API](https://docs.github.com/en/rest/actions/permissions#update-fork-pr-contributor-approval-permissions-for-a-repository)
 and [non-force ref updates](https://docs.github.com/en/rest/git/refs#update-a-reference).
-The local patch does not change this remote setting or create the lease ref.
+The fork approval setting is the only authorized remote change so far.
 The first approved trusted scheduler run creates the state-only ref.
 
 ## PR receipt contract for the site
