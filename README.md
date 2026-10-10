@@ -57,6 +57,8 @@ It is an operation-count theorem, not a bit-complexity claim.
   workflow uses no repository secrets and no Actions cache upload/save action.
 - A new VM runs each job. Network access is used only for public source fetches
   and trusted tool/dependency setup. No submission code runs during setup.
+  Setup loads Ubuntu's packaged `bwrap-userns-restrict` AppArmor profile so
+  bubblewrap can create its namespaces; global userns restrictions stay enabled.
 - Submission compilation, export, kernel checks, and audit run in a bwrap
   namespace with no network, a private process namespace, and an empty
   environment except for explicit tool paths. Comparator also retains landrun

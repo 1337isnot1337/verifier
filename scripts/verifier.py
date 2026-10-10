@@ -241,7 +241,11 @@ def setup():
     request = json.loads((WORK / 'control/request.json').read_text())['request']
     tools = WORK / 'tools'
     command(['sudo', 'apt-get', 'update'], 'apt-update')
-    command(['sudo', 'apt-get', 'install', '-y', 'bubblewrap', 'build-essential', 'pkg-config', 'libssl-dev'], 'apt-tools')
+    command(['sudo', 'apt-get', 'install', '-y', 'bubblewrap', 'build-essential', 'pkg-config', 'libssl-dev', 'apparmor'], 'apt-tools')
+    # GitHub images can have the packaged profile present but not loaded.
+    # Load Ubuntu's policy for bwrap; keep global userns restrictions enabled.
+    command(['sudo', 'apparmor_parser', '-r', '/etc/apparmor.d/bwrap-userns-restrict'],
+            'bwrap-apparmor-policy')
     # Only preinstalled SDKs on this disposable GitHub VM; never user/source paths.
     command(['sudo', 'rm', '-rf', '--', '/usr/share/dotnet', '/usr/local/lib/android', '/opt/ghc',
              '/usr/local/.ghcup'], 'runner-sdk-space')
