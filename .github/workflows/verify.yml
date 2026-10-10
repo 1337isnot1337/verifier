@@ -1,0 +1,64 @@
+name: Verify a Lean proof
+run-name: Verify ${{ inputs.commit }}
+on:
+  workflow_dispatch:
+    inputs:
+      repo_url:
+        description: Public GitHub submission repository URL
+        required: true
+        default: https://github.com/chafreaky/wht-power-saving-lean
+        type: string
+      commit:
+        description: Full immutable submission commit SHA
+        required: true
+        default: 837dc3130adc79f7b7ab4ddd56c15576bbd766b0
+        type: string
+      challenge_file:
+        description: Registered challenge file in this verifier repository
+        required: true
+        default: challenges/dft/UniformFourier233.lean
+        type: string
+      theorem_names:
+        description: Comma-separated theorem names from the challenge profile
+        required: true
+        default: OAI.PowerSaving.transform_mainY,OAI.PowerSaving.convolution_mainY
+        type: string
+      lean_toolchain:
+        description: Reviewed Lean toolchain for this challenge
+        required: true
+        default: leanprover/lean4:v4.34.1
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: public-lean-verifier
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - name: Check out trusted verifier
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Test trusted controller
+        run: python3 -m unittest discover -s tests -v
+      - name: Validate inputs and fetch source at the pin
+        run: python3 scripts/verifier.py prepare
+      - name: Build pinned tools and fetch trusted Mathlib cache
+        timeout-minutes: 45
+        run: python3 scripts/verifier.py setup
+      - name: Fresh lake build, Comparator kernels, and axiom audit
+        run: python3 scripts/verifier.py verify
+      - name: Finalize JSON receipt
+        if: always()
+        run: python3 scripts/verifier.py finalize
+      - name: Upload receipt and logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: verifier-receipt-and-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90

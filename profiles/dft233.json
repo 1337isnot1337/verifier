@@ -1,0 +1,23 @@
+{
+  "lean_toolchain": "leanprover/lean4:v4.34.1",
+  "challenge_file": "challenges/dft/UniformFourier233.lean",
+  "challenge_sha256": "3a646acd3ac9cf6ff93e29cc363dbfea0c8953a2e1415f7965bd86e8b2ee62a3",
+  "solution_module": "Work.Fourier233.Main",
+  "theorem_names": [
+    "OAI.PowerSaving.transform_mainY",
+    "OAI.PowerSaving.convolution_mainY"
+  ],
+  "source_roots": [
+    "OAI",
+    "Work",
+    "WHTCheck"
+  ],
+  "permitted_axioms": [
+    "propext",
+    "Quot.sound",
+    "Classical.choice"
+  ],
+  "saving": "7547360/10000000000",
+  "model": "OpenAI.PowerSaving.DFTProgram (exact scalar/index RAM; all positive lengths)",
+  "upstream_commit": "fd4aeeb2ee4fc729c18d98444fed42fd0529eeeb"
+}

@@ -1,0 +1,13 @@
+Big O Speedrun verifier
+
+The trusted DFT challenge is a modified copy of
+lean/ComparatorChallenges/UniformFourier.lean from openai/math at
+fd4aeeb2ee4fc729c18d98444fed42fd0529eeeb, released under Apache-2.0.
+Upstream SHA-256: 4c571f275bd7506c3ccd1e6d78f2fca77e07112c969c1c62ad8359d61544ec74.
+OpenAI is credited for the formalization, paper and all-length reduction.
+The verifier's changes are recorded in the challenge header and profile.
+
+The first tested submission is Chafik Boukhalfa's PR #2 to Jacob Sussman's
+wht-power-saving-lean repository. Its source is fetched at an immutable commit
+and is not vendored as the trusted challenge. Its authors and community
+predecessors retain their credit and license notices.
