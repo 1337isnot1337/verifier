@@ -26,11 +26,14 @@ For verifier development, run python3 -m unittest discover -s tests -v.
 Run Lean only on GitHub Actions. Never run Lean on the office box.
 Keep proof execution and result publication on separate fresh runners.
 Never execute submission code in a job with write permission or secrets.
-Share ten execution slots and the account concurrency key across both routes.
-The PR verifier uses pull_request with read-only permissions, never
-pull_request_target. The workflow_run publisher checks only trusted code and
+Use the trusted scheduler lease for a shared batch of ten distinct accounts.
+Never rely on Actions concurrency groups that fork YAML can name.
+Poll PR source data from default-branch code; no pull_request or
+pull_request_target workflow may select or verify trusted submissions. The workflow_run publisher checks only trusted code and
 artifact data. Recheck the complete added-only folder diff, file modes,
 controller blob identities and current head. Merge with GitHub’s SHA condition.
+Re-read the head immediately before closure; a changed head stays open.
+Validate run identity before artifact download; enforce API size and stream caps.
 Check the current record at selection and again before compilation. A bound
 below the record stays Claimed and starts no Lean run. A tie qualifies unless
 a tied leader already has Lean Verified evidence. Preserve separate author rows.

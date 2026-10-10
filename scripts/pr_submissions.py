@@ -18,7 +18,7 @@ import submissions as s
 from verdicts import AXIOMS
 
 ROOT = Path(__file__).resolve().parents[1]
-WORKFLOW = '.github/workflows/pr-verify.yml'
+WORKFLOW = '.github/workflows/submissions.yml'
 PUBLISHER = '.github/workflows/pr-publish.yml'
 MAX_FILES = 500
 MAX_ARCHIVE = 50 * 1024 * 1024
@@ -34,6 +34,7 @@ class SupersededHead(ValueError):
 
 
 def api(path, data=None, method=None, raw=False):
+    s.scan_check(path)
     req = urllib.request.Request('https://api.github.com/repos/' + s.REPOSITORY + '/' + path,
         data=None if data is None else json.dumps(data).encode(), method=method,
         headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
@@ -46,8 +47,28 @@ def api(path, data=None, method=None, raw=False):
                 redirected.remove_header('Authorization')
             return redirected
     opener = urllib.request.build_opener(PublicRedirect)
-    with opener.open(req, timeout=60) as response:
-        return response.read() if raw else json.load(response)
+    with opener.open(req, timeout=s.scan_timeout()) as response:
+        return bounded_read(response) if raw else json.load(response)
+
+
+def bounded_read(response):
+    content_length = response.headers.get('Content-Length')
+    if content_length is not None and int(content_length) > MAX_ARCHIVE:
+        raise ValueError('Artifact exceeds download limit')
+    chunks, total = [], 0
+    while total <= MAX_ARCHIVE:
+        chunk = response.read(min(65536, MAX_ARCHIVE + 1 - total))
+        if not chunk:
+            return b''.join(chunks)
+        chunks.append(chunk)
+        total += len(chunk)
+    raise ValueError('Artifact exceeds download limit')
+
+
+def validate_artifact_size(artifact):
+    size = artifact.get('size_in_bytes')
+    if type(size) is not int or not 0 <= size <= MAX_ARCHIVE:
+        raise ValueError('Artifact API size is missing or exceeds limit')
 
 
 def digest(value):
@@ -224,38 +245,44 @@ def validate_controller(head, base):
                 raise LayoutError('PR workflow/controller differs from the trusted publisher revision')
 
 
-def select_pr():
-    event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
-    number = event['pull_request']['number']
-    pr = api(f'pulls/{number}')
-    selected = {'schema_version': 2, 'route': 'pull_request', 'pr_number': number,
-        'head_sha': event['pull_request']['head']['sha'], 'base_sha': event['pull_request']['base']['sha'],
-        'pr_submitter_login': event['pull_request']['user']['login'], 'test_only': False}
+def select_candidate(issue, comments):
+    pr = api(f"pulls/{issue['number']}")
+    marker = f"<!-- bos-pr-v2 {pr['number']} {pr['head']['sha']} -->"
+    if any(s.is_bot(c) and c.get('body', '').startswith(marker) for c in comments):
+        return None
+    selected = {'schema_version': 2, 'route': 'pull_request', 'pr_number': pr['number'],
+        'head_sha': pr['head']['sha'], 'base_sha': pr['base']['sha'],
+        'pr_submitter_login': pr['user']['login'], 'test_only': False}
     try:
-        if pr['head']['sha'] != selected['head_sha'] or pr['state'] != 'open':
-            selected.update(gate='superseded', reason='New head or closed PR; current event is stale')
-        else:
-            selected = inspect_pr(pr)
-            validate_controller(selected['head_sha'], selected['base_sha'])
-            record = s.current_record(selected['submission']['problem'], selected['pr_url'])
-            selected['record_gate'] = record
-            selected.update(gate='ready' if s.qualifies_for_run(selected['submission'], record) else 'claimed_only',
-                            reason='record_gate')
+        selected = inspect_pr(pr)
+        record = s.current_record(selected['submission']['problem'], selected['pr_url'])
+        selected['record_gate'] = record
+        selected.update(gate='ready' if s.qualifies_for_run(selected['submission'], record) else 'claimed_only', reason='record_gate')
     except LayoutError as exc:
         selected.update(gate='invalid_layout', reason=str(exc))
-    selected['verifier_commit'] = event['pull_request']['base']['sha']
-    Path('pr-request.json').write_text(s.canonical(selected) + '\n')
-    with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
-        out.write('ready=' + str(selected['gate'] == 'ready').lower() + '\n')
-        out.write('slot=' + str(s.execution_slot(selected['pr_submitter_login'])) + '\n')
+    selected['verifier_commit'] = os.environ['GITHUB_SHA']
+    return selected
+
+
+def materialize_pr():
+    number = os.environ['ISSUE_NUMBER']
+    if not re.fullmatch('[1-9][0-9]*', number):
+        raise ValueError('Invalid PR number')
+    selected = json.loads(Path(f'requests/{number}.json').read_text())
+    if selected['pr_number'] != int(number) or selected.get('test_only') is not False:
+        raise ValueError('PR identity mismatch or fixture')
+    Path('pr-input').mkdir(exist_ok=True)
+    Path('pr-input/pr-request.json').write_text(s.canonical(selected) + '\n')
 
 
 def preflight_pr():
+    import queue_lease
+    queue_lease.assert_owner()
     selected = json.loads(Path('pr-input/pr-request.json').read_text())
     pr = api(f"pulls/{selected['pr_number']}")
     if pr['state'] != 'open' or pr['head']['sha'] != selected['head_sha']:
         selected.update(gate='superseded', reason='PR changed before compilation')
-    else:
+    elif selected.get('gate') == 'ready':
         inspect_pr(pr, selected['manifest_utf8'].encode())
         record = s.current_record(selected['submission']['problem'], selected['pr_url'])
         selected['record_gate'] = record
@@ -319,41 +346,59 @@ def read_archive(raw, metadata):
     return result
 
 
-def validate_run(run, request, pr):
-    if run.get('repository', {}).get('full_name') != s.REPOSITORY or run.get('path') != WORKFLOW or run.get('event') != 'pull_request' or run.get('status') != 'completed':
+def validate_run_identity(run):
+    if (run.get('repository', {}).get('full_name') != s.REPOSITORY
+            or run.get('path') != WORKFLOW or run.get('event') not in ['schedule', 'issues', 'workflow_dispatch']
+            or run.get('status') != 'completed' or run.get('head_branch') != 'main'
+            or run.get('head_repository', {}).get('full_name') != s.REPOSITORY):
         raise ValueError('Untrusted verification workflow')
-    workflow = api('actions/workflows/pr-verify.yml')
+    workflow = api('actions/workflows/submissions.yml')
     if run['workflow_id'] != workflow['id']:
         raise ValueError('Workflow ID mismatch')
+
+
+def validate_run(run, request, pr):
+    validate_run_identity(run)
     if request.get('test_only') is not False or request.get('route') != 'pull_request' or request.get('pr_number') != pr['number']:
         raise ValueError('Fixture or PR identity mismatch')
-    # GitHub records the source head for pull_request runs. Unknown API shapes
-    # stay open for review until tested on hosted Actions; never relax the pin.
-    if run.get('head_sha') != request['head_sha'] or run.get('head_repository', {}).get('full_name') != pr['head']['repo']['full_name']:
-        raise ValueError('Run source head or repository mismatch')
+    if run.get('head_sha') != request['verifier_commit']:
+        raise ValueError('Run controller revision mismatch')
     if request['pr_submitter_login'] != pr['user']['login']:
         raise ValueError('PR submitter mismatch')
 
 
-def publish_pr():
+def publish_batch():
+    event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
+    run = api(f"actions/runs/{event['workflow_run']['id']}")
+    validate_run_identity(run)
+    if run['run_attempt'] != event['workflow_run'].get('run_attempt'):
+        raise ValueError('Superseded workflow attempt')
+    artifacts = api(f"actions/runs/{run['id']}/artifacts?per_page=100")['artifacts']
+    pattern = rf"pr-verification-{run['id']}-{run['run_attempt']}-[1-9][0-9]*"
+    matches = [a for a in artifacts if re.fullmatch(pattern, a['name']) and not a.get('expired')]
+    if len(matches) > 10 or len({a['name'] for a in matches}) != len(matches):
+        raise ValueError('Oversized or duplicate PR batch')
+    for artifact in matches:
+        publish_pr(artifact)
+
+
+def publish_pr(artifact_override=None):
     event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
     run_id = event['workflow_run']['id']
     run = api(f'actions/runs/{run_id}')
+    validate_run_identity(run)
     attempt = run['run_attempt']
     if event['workflow_run'].get('run_attempt') != attempt:
         raise ValueError('Superseded workflow attempt; no PR mutation')
-    artifacts = api(f'actions/runs/{run_id}/artifacts?per_page=100')['artifacts']
-    name = f'pr-verification-{run_id}-{attempt}'
-    matches = [a for a in artifacts if a['name'] == name and not a.get('expired')]
-    if len(matches) != 1:
-        # The intake artifact survives a cancelled proof job and permits a safe
-        # pending-review report. It can never provide a proof verdict.
-        name = f'pr-input-{run_id}-{attempt}'
-        matches = [a for a in artifacts if a['name'] == name and not a.get('expired')]
-    if len(matches) != 1:
-        missing_artifact_review(run)
-        return
-    artifact = matches[0]
+    if artifact_override is None:
+        artifacts = api(f'actions/runs/{run_id}/artifacts?per_page=100')['artifacts']
+        matches = [a for a in artifacts if re.fullmatch(rf'pr-verification-{run_id}-{attempt}-[1-9][0-9]*', a['name']) and not a.get('expired')]
+        if len(matches) != 1:
+            raise ValueError('Expected one PR artifact')
+        artifact = matches[0]
+    else:
+        artifact = artifact_override
+    validate_artifact_size(artifact)
     raw = api(f"actions/artifacts/{artifact['id']}/zip", raw=True)
     files = read_archive(raw, artifact)
     request = json.loads(files['pr-request.json'])
@@ -362,6 +407,8 @@ def publish_pr():
         raise ValueError('Invalid PR number')
     pr = api(f'pulls/{number}')
     validate_run(run, request, pr)
+    if artifact['name'] != f'pr-verification-{run_id}-{attempt}-{number}':
+        raise ValueError('Artifact PR identity mismatch')
     recovering_merge = pr['state'] == 'closed' and pr.get('merged') is True
     if pr['state'] != 'open' and not recovering_merge:
         return
@@ -408,7 +455,7 @@ def publish_pr():
         'publisher_run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
         'receipt_sha256': digest(files['receipt.json']) if 'receipt.json' in files else None,
         'disposition': disposition, 'reason': reason, 'merge_commit': None}
-    comment = f'PR proof result: **{disposition}**. {reason}.\n\n[Receipt and logs]({url})'
+    comment = f"<!-- bos-pr-v2 {number} {request['head_sha']} -->\n" + f'PR proof result: **{disposition}**. {reason}.\n\n[Receipt and logs]({url})'
     if disposition == 'close' and receipt and receipt.get('kernels', {}).get('nanoda', {}).get('status') == 'rejected':
         comment += '\n\n@nmamano Nanoda rejected this proof; maintainer review is required.'
     # No proof output or unchecked issue text is posted.
@@ -434,30 +481,15 @@ def publish_pr():
             else:
                 label_review(number)
     elif disposition == 'close' and not recovering_merge:
-        api(f'pulls/{number}', {'state': 'closed'}, method='PATCH')
+        current = api(f'pulls/{number}')
+        if current['head']['sha'] != request['head_sha']:
+            envelope.update(disposition='keep_open', reason='A newer commit has its own check; close skipped', importable=False)
+        elif current['state'] == 'open':
+            api(f'pulls/{number}', {'state': 'closed'}, method='PATCH')
     elif disposition == 'keep_open' and not recovering_merge and not superseded:
         label_review(number)
     Path('published').mkdir(exist_ok=True)
-    Path('published/pr-submission.json').write_text(s.canonical(envelope) + '\n')
-
-
-def missing_artifact_review(run):
-    # Only API-associated PRs can receive an infrastructure label without an
-    # artifact. Never infer a PR number from a branch name or untrusted log.
-    if run.get('path') != WORKFLOW or run.get('event') != 'pull_request' or run.get('repository', {}).get('full_name') != s.REPOSITORY:
-        raise ValueError('Untrusted run without artifact')
-    for association in run.get('pull_requests', []):
-        number = association['number']
-        pr = api(f'pulls/{number}')
-        if pr['state'] == 'open' and pr['head']['sha'] == run['head_sha'] and pr['base']['repo']['full_name'] == s.REPOSITORY:
-            label_review(number)
-    Path('published').mkdir(exist_ok=True)
-    Path('published/pr-submission.json').write_text(s.canonical({'schema_version': 2, 'route': 'pull_request',
-        'importable': False, 'test_only': False, 'run_id': str(run['id']),
-        'run_attempt': str(run['run_attempt']), 'disposition': 'keep_open',
-        'publisher_commit': os.environ['GITHUB_SHA'], 'publisher_run_id': os.environ['GITHUB_RUN_ID'],
-        'publisher_run_attempt': os.environ['GITHUB_RUN_ATTEMPT'], 'receipt_sha256': None,
-        'reason': 'Missing proof artifact; infrastructure review required'}) + '\n')
+    Path(f'published/pr-submission-{number}.json').write_text(s.canonical(envelope) + '\n')
 
 
 def label_review(number):
@@ -473,5 +505,5 @@ def label_review(number):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('phase', choices=['select_pr', 'preflight_pr', 'publish_pr'])
+    parser.add_argument('phase', choices=['materialize_pr', 'preflight_pr', 'publish_pr', 'publish_batch'])
     globals()[parser.parse_args().phase]()

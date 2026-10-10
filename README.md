@@ -35,7 +35,7 @@ The bot posts a receipt on the issue or PR. For PRs, a Lean pass causes an
 automatic merge. A real Lean or axiom failure, or a real nanoda rejection,
 causes an automatic close. A timeout, resource limit, or infrastructure failure
 leaves the PR open with a review label and a maintainer mention. A below-record
-PR stays open as Claimed. New PR commits start a new check.
+PR stays open as Claimed. Scheduled checks pick up new PR commits.
 
 Before merging, the bot checks that the PR adds only its own new submission
 folder and that its head is the verified commit. An unsafe diff is closed with a reason.

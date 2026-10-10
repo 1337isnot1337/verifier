@@ -1,0 +1,77 @@
+"""Default-branch admission lease. Fork read tokens cannot change this ref."""
+import argparse
+import json
+import os
+import urllib.error
+from pathlib import Path
+import submissions as s
+
+REF = 'heads/automation/submission-queue'
+
+
+class Lease:
+    def __init__(self, sha, state, tree):
+        self.sha, self.state, self.tree = sha, state, tree
+
+    def save(self):
+        commit = s.api('git/commits', {'message': s.canonical(self.state), 'tree': self.tree,
+                                      'parents': [self.sha] if self.sha else []})['sha']
+        if self.sha:
+            s.api('git/refs/' + REF, {'sha': commit, 'force': False}, method='PATCH')
+        else:
+            s.api('git/refs', {'ref': 'refs/' + REF, 'sha': commit})
+        self.sha = commit
+
+
+def acquire():
+    run_id, attempt = os.environ['GITHUB_RUN_ID'], os.environ['GITHUB_RUN_ATTEMPT']
+    try:
+        sha = s.api('git/ref/' + REF)['object']['sha']
+    except urllib.error.HTTPError as exc:
+        if exc.code != 404:
+            raise
+        sha = None
+    if sha:
+        commit = s.api('git/commits/' + sha)
+        state = json.loads(commit['message'])
+        # A rerun must not reuse outputs from a still-active attempt.
+        owner_path = 'actions/runs/' + state['run_id']
+        if state['run_id'] == run_id and int(state['run_attempt']) < int(attempt):
+            owner_path += '/attempts/' + state['run_attempt']
+        owner = s.api(owner_path)
+        if owner['status'] != 'completed':
+            return None
+        tree = commit['tree']['sha']
+    else:
+        state = {'schema_version': 1, 'page': 1, 'offset': 0}
+        tree = s.api('git/trees', {'tree': [{'path': 'queue.json', 'mode': '100644', 'type': 'blob', 'content': '{}\n'}]})['sha']
+    state.update(run_id=run_id, run_attempt=attempt)
+    lease = Lease(sha, state, tree)
+    try:
+        # Concurrent contenders create sibling commits. Only one can fast-forward.
+        lease.save()
+    except urllib.error.HTTPError as exc:
+        if exc.code in [409, 422]:
+            return None
+        raise
+    return lease
+
+
+def assert_owner():
+    sha = s.api('git/ref/' + REF)['object']['sha']
+    state = json.loads(s.api('git/commits/' + sha)['message'])
+    if (state['run_id'], state['run_attempt']) != (os.environ['GITHUB_RUN_ID'], os.environ['GITHUB_RUN_ATTEMPT']):
+        raise ValueError('Batch lease belongs to another run/attempt; rerun the whole workflow')
+
+
+def main():
+    lease = acquire()
+    with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+        out.write('admitted=' + str(lease is not None).lower() + '\n')
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('phase', choices=['acquire', 'check'])
+    args = parser.parse_args()
+    assert_owner() if args.phase == 'check' else main()

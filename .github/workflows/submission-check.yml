@@ -5,15 +5,13 @@ on:
       issue_number:
         required: true
         type: number
-      slot:
+      route:
         required: true
-        type: number
+        type: string
 permissions: {}
 jobs:
   verify:
-    concurrency:
-      group: bos-proof-slot-${{ inputs.slot }}
-      cancel-in-progress: false
+    if: inputs.route == 'issue'
     runs-on: ubuntu-latest
     timeout-minutes: 350
     permissions:
@@ -55,11 +53,8 @@ jobs:
           if-no-files-found: error
           retention-days: 90
   report:
-    concurrency:
-      group: bos-proof-slot-${{ inputs.slot }}
-      cancel-in-progress: false
     needs: verify
-    if: always()
+    if: always() && inputs.route == 'issue'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -96,3 +91,48 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/submissions.py publish
+  pr_verify:
+    if: inputs.route == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      BOS_REQUEST_PATH: pr-request.json
+      BOS_VERIFIER_COMMIT: ${{ github.sha }}
+      ISSUE_NUMBER: ${{ inputs.issue_number }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: direct-requests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: requests
+      - run: python3 scripts/pr_submissions.py materialize_pr
+      - id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/pr_submissions.py preflight_pr
+      - if: steps.gate.outputs.proceed == 'true'
+        run: python3 -m unittest discover -s tests -v
+      - if: steps.gate.outputs.proceed == 'true'
+        run: python3 scripts/verifier.py prepare
+      - if: steps.gate.outputs.proceed == 'true'
+        timeout-minutes: 45
+        run: python3 scripts/verifier.py setup
+      - if: steps.gate.outputs.proceed == 'true'
+        continue-on-error: true
+        run: python3 scripts/verifier.py verify
+      - if: always()
+        run: python3 scripts/verifier.py finalize
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: pr-verification-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.issue_number }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90

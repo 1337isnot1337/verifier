@@ -42,12 +42,11 @@ checks the board and unchanged issue body again immediately before compilation.
 If either changed, no Lean run starts and the result remains Claimed.
 
 Issue batches select at most ten requests and one per authenticated login.
-Both routes share account concurrency keys and ten deterministic proof slots.
-The manual verifier also uses one of these slots. Thus at most ten proof/report
-jobs run together on standard runners; hash collisions can reduce utilization.
-Each account has at most one active and one queued request across both routes.
-Additional issue submissions remain Claimed for a later scan. See the PR design
-for the shared slot keys and cancellation handling.
+Both routes share a trusted Git-ref lease that admits one batch at a time.
+The manual verifier uses the same lease. Thus at most ten proof/report branches
+run together on standard runners. Additional submissions remain Claimed for a
+later scan. The scan has entry, API and time budgets, persists its page cursor,
+and writes selections incrementally. See the PR design for lease and scan details.
 
 The schedule rescans open issues. A processed marker binds both the normalized
 submission hash and raw issue body hash. Only the GitHub Actions bot's marker
@@ -59,8 +58,8 @@ so an artifact upload failure leaves the request eligible for recovery.
 Every job runs trusted default-branch code at the event SHA. No job checks out
 a PR branch. User values enter no shell script or executable path.
 
-The select job has issue write permission to post non-improvement/account-cap
-replies. It parses data only and executes no submitted code. The proof job has
+The select job has contents write permission for the state-only admission lease
+and issue write permission for gate replies. It parses data only and executes no submitted code. The proof job has
 only contents/issue read permission. Its preflight token is scoped to the
 trusted data-reading step. The source fetch pins the complete public commit;
 trusted setup builds reviewed tools and fixed dependencies.

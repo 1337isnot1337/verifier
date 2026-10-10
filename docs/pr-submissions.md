@@ -29,23 +29,25 @@ branch protection or retries a merge without the verified SHA.
 
 ## Security design
 
-`.github/workflows/pr-verify.yml` runs only on `pull_request`, with contents,
-PR, and issue read permission. It checks out the immutable base SHA, never the
-PR head. The trusted intake reads GitHub diff/tree metadata and the small manifest
-as data. It compares protected workflow/controller/config blob identities at the
-head and base with the trusted checkout. This check matters because a PR can
-propose changes to its own workflow file. Such PRs cannot earn trusted evidence.
+The default-branch `.github/workflows/submissions.yml` scheduler polls open
+issues and PRs through the API. There is no trusted `pull_request` or
+`pull_request_target` workflow. The scheduler reads PR trees and manifest bytes
+as data; `.github/workflows/submission-check.yml` runs each selected proof on a
+fresh read-only runner with the trusted scheduler SHA. No job checks out PR code.
+A fork-provided workflow cannot select proofs or grant a trusted receipt.
 
 The controller fetches the pinned PR commit with hooks disabled. It copies only
 regular Lean files from the validated `source_subdir`. It supplies all Lake files,
 dependencies, target definitions, and tools. Proof code executes only in the existing
 offline sandbox, with no write token, secrets, checkout, or receipt access.
 
-`.github/workflows/pr-publish.yml` uses `workflow_run` on completed PR checks.
+`.github/workflows/pr-publish.yml` uses `workflow_run` on completed trusted submission batches.
 It checks out only the trusted default-branch revision. It never checks out or
 executes PR code, even after a pass. It validates the upstream run repository,
-workflow ID/path, event, attempt, head SHA/repository, and PR identity. It reads
-only a bounded ZIP from that run, checks the API artifact digest, rejects paths
+workflow ID/path, default-branch event, attempt, controller SHA/repository, and PR identity.
+It validates run identity before download, rejects missing or oversized API
+`size_in_bytes`, and streams at most 50 MiB plus one sentinel byte. It then
+checks the API artifact digest, rejects paths
 or duplicate members, and checks receipt/log hashes. Artifact download redirects
 do not forward the GitHub token outside api.github.com.
 
@@ -57,7 +59,9 @@ the PR's Git blob SHA. Proof sources are not read or run in this write-capable j
 An unsafe diff at the checked head is closed with a reason. If the head changed,
 the old result skips merge and leaves the PR open for the new commit’s check,
 without a review label. This check precedes comparison with the old manifest.
-The merge API also receives `sha: verified_head_sha`, which closes the race between
+Immediately before closure, the publisher re-reads the PR head and skips closure
+if a new commit appeared. GitHub does not offer a SHA condition for closing a PR,
+so this narrows rather than eliminates the final read-to-close race. The merge API also receives `sha: verified_head_sha`, which closes the race between
 that check and merge. If GitHub declines, the PR stays open for review.
 
 The publisher can reconstruct an accepted artifact after a merge if artifact upload
@@ -67,26 +71,40 @@ receipt alone does not mutate another author's existing row.
 
 ## Shared capacity
 
-Both routes use `bos-submitter-<login>` concurrency keys: at most one active and
-one pending request per account. Each login maps deterministically to one of ten
-`bos-proof-slot-0` through `bos-proof-slot-9` keys. Issue proof/report jobs and PR
-proof jobs share those keys; the manual verifier uses slot 0. At most ten such
-jobs run concurrently. Hash collisions can reduce utilization but cannot exceed
-the cap. PR intake has a separate single administrative slot. Publication is serialized
-per upstream run, so simultaneous completions do not cancel each other’s reports.
-These short metadata jobs use standard runners. No external queue service or
-repository secret is needed.
+The trusted selector acquires a Git-ref lease at
+`refs/heads/automation/submission-queue`. The ref points to a state-only commit
+whose message contains owner run ID/attempt and scan page/offset. A contender
+creates a child of the observed commit and uses a non-force fast-forward ref
+update. Concurrent sibling updates cannot both win. The selector takes over
+only after the prior owner attempt is complete. It admits one batch with at
+most ten distinct logins, covering both routes. The manual verifier uses this
+same lease. Proof preflight rechecks ownership, including the attempt, so an
+old individual-job rerun cannot reuse admission. Rerun the whole workflow to
+acquire a new lease. No trusted workflow uses an Actions concurrency group
+that fork YAML can name or cancel.
 
-GitHub's default concurrency queue can replace a pending request. A cancelled PR
-check stays open for review; issue requests without a result marker remain visible
-to the scheduled scan. No missing/cancelled check is interpreted as mathematical
-rejection. First-time fork contributors may also need GitHub's own workflow approval.
+The selector stops at ten selected entries, forty scanned entries, four minutes,
+or four hundred API calls. The cursor advances after each candidate. Request
+files and matrix outputs are written after each admission. A later API error
+therefore preserves earlier selections; subsequent scans resume at the saved
+cursor. Each scan reads at most one hundred comments per candidate. Page/offset
+pagination wraps to the start; deletion can shift an item into the next cycle.
+Lease-state writes have a separate fixed bound of two calls per candidate.
+
+Before deployment, set repository Actions fork approval to
+`all_external_contributors` (the strictest policy). This applies to fork-owned
+PR YAML and does not block trusted schedule/issue/default-branch dispatch runs.
+Never approve fork workflow YAML to submit a proof; the scheduler reads the
+proof files itself. See GitHub’s [fork approval API](https://docs.github.com/en/rest/actions/permissions#update-fork-pr-contributor-approval-permissions-for-a-repository)
+and [non-force ref updates](https://docs.github.com/en/rest/git/refs#update-a-reference).
+The local patch does not change this remote setting or create the lease ref.
+The first approved trusted scheduler run creates the state-only ref.
 
 ## PR receipt contract for the site
 
 Issue envelopes retain schema version 1. PR publication emits schema version 2 in
 `pr-submission-VERIFICATION_RUN_ID-ATTEMPT-publisher-PUBLISHER_RUN_ID-PUBLISHER_ATTEMPT`,
-containing `pr-submission.json`.
+containing `pr-submission-PR_NUMBER.json` for each PR in the batch.
 The publisher workflow's own run ID identifies where that artifact lives.
 
 - `schema_version: 2`, `route: pull_request`, `test_only: false`.
@@ -106,9 +124,12 @@ The publisher workflow's own run ID identifies where that artifact lives.
   per-theorem/per-kernel results, axiom audit, UTC checked_at, and artifact hashes.
   A skipped/failed setup may have no mathematical receipt.
 - `run_id`, `run_attempt`, `run_url`, `workflow_path`, `workflow_conclusion`,
-  `verifier_commit` identify the read-only verification run.
+  `verifier_commit` identify the trusted scheduler run. Its API head SHA is `verifier_commit`,
+  not the PR source head. `workflow_path` is `.github/workflows/submissions.yml`;
+  the reusable workflow is `.github/workflows/submission-check.yml`.
 - `receipt_artifact`: API ID, name, digest, and public URL for
-  `pr-verification-RUN-ATTEMPT` (or the non-proof `pr-input-RUN-ATTEMPT` fallback).
+  `pr-verification-RUN-ATTEMPT-PR_NUMBER`. A skipped proof still records its
+  selected request and gate; a missing artifact cannot admit a row.
 - `receipt_sha256`: SHA-256 of the raw `receipt.json` artifact bytes, before JSON
   parsing or normalization; null when no receipt exists.
 - `publisher_commit`, `publisher_run_id`, and `publisher_run_attempt` identify the
@@ -135,6 +156,6 @@ bytes are in `tests/fixtures/direct/pr-receipt.json` so the receipt hash is test
 Python tests cover allowed paths/modes, source-folder staging, manifest injection,
 artifact digest/path attacks, run identity, stale heads, protected-code changes,
 atomic merge SHA, real failure closure, and incomplete-run labels. Workflow lint
-runs on the exact YAML. No Lean runs on the office box. Hosted fork event metadata,
+runs on the exact YAML. No Lean runs on the office box. Hosted scheduler/reusable metadata,
 GitHub token permissions, merge behavior, and API artifact digests still need an
 approved live smoke test. This phase commits locally and performs no public action.

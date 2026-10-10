@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import urllib.request
+import time
 from datetime import datetime, timezone
 from verdicts import admission
 
@@ -133,13 +134,33 @@ theorem Race.bound : ∃ order solve W, DFTProgram order solve W ∧
     return base + '\n-- Big O Speedrun exact-bound target; generated from validated integers.\n' + target
 
 
-def api(path, data=None):
+SCAN_BUDGET = None
+
+
+class ScanLimit(RuntimeError):
+    pass
+
+
+def scan_check(path=''):
+    if SCAN_BUDGET is None or path.startswith(('git/commits', 'git/refs')):
+        return
+    if SCAN_BUDGET['calls'] >= 400 or time.monotonic() >= SCAN_BUDGET['deadline']:
+        raise ScanLimit('Selection API/time budget exhausted; saved cursor will resume')
+    SCAN_BUDGET['calls'] += 1
+
+
+def scan_timeout():
+    return 15 if SCAN_BUDGET is not None else 60
+
+
+def api(path, data=None, method=None):
+    scan_check(path)
     # This constant origin is the only destination for this scoped token.
     req = urllib.request.Request('https://api.github.com/repos/' + REPOSITORY + '/' + path,
-          data=None if data is None else json.dumps(data).encode(),
+          data=None if data is None else json.dumps(data).encode(), method=method,
           headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json',
                    'X-GitHub-Api-Version': '2022-11-28', 'Content-Type': 'application/json'})
-    with urllib.request.urlopen(req, timeout=60) as response:
+    with urllib.request.urlopen(req, timeout=scan_timeout()) as response:
         return json.load(response)
 
 
@@ -183,10 +204,11 @@ def issue_request(issue, submission):
 def site_snapshot(problem):
     import base64
     def read(path):
+        scan_check(path)
         req = urllib.request.Request('https://api.github.com/repos/bigospeedrun/site/' + path,
                                      headers={'Accept': 'application/vnd.github+json',
                                               'Authorization': 'Bearer ' + os.environ['GH_TOKEN']})
-        with urllib.request.urlopen(req, timeout=60) as response:
+        with urllib.request.urlopen(req, timeout=scan_timeout()) as response:
             return json.load(response)
     sha = read('commits/main')['sha']
     if not re.fullmatch('[0-9a-f]{40}', sha):
@@ -236,47 +258,89 @@ def qualifies_for_run(submission, record):
     return candidate > current if submission['problem'] == 'dft' else candidate < current
 
 
-def execution_slot(login):
-    return int(hashlib.sha256(login.lower().encode()).hexdigest(), 16) % 10
+def selection_outputs(selected):
+    with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+        out.write('selected=' + str(bool(selected)).lower() + '\n')
+        out.write('matrix=' + canonical({'include': selected}) + '\n')
 
 
 def select():
-    """One active batch, ten parallel branches, one pending request per login."""
+    global SCAN_BUDGET
+    SCAN_BUDGET = {'calls': 0, 'deadline': time.monotonic() + 240}
+    try:
+        select_bounded()
+    except ScanLimit:
+        pass  # Incremental outputs and the cursor already preserve completed work.
+    finally:
+        SCAN_BUDGET = None
+
+
+def select_bounded():
+    """One trusted batch; resumable 40-candidate/4-minute scan, ten accounts."""
+    import queue_lease
+    import pr_submissions as pr
     selected, authors = [], set()
+    selection_outputs(selected)
+    lease = queue_lease.acquire()
+    if lease is None:
+        return
     Path('requests').mkdir(exist_ok=True)
-    for issue in pages('issues?state=open&sort=created&direction=asc'):
-        try:
-            submission = issue_input(issue)
-        except ValueError:
-            continue
-        if submission is None:
-            continue
-        request = issue_request(issue, submission)
-        digest = request['submission_sha256']
-        comments = list(pages(f"issues/{issue['number']}/comments"))
-        if any(is_bot(c) and c.get('body', '').startswith(marker_for(issue['number'], digest, request['issue_body_sha256'])) for c in comments):
-            continue
-        record = current_record(submission['problem'], request['issue_url'])
-        if not qualifies_for_run(submission, record):
-            marker = f"<!-- bos-claimed-v1 {issue['number']} {digest} -->"
-            if not any(is_bot(c) and c.get('body', '').startswith(marker) for c in comments):
-                api(f"issues/{issue['number']}/comments", {'body': marker + '\nThe bound is below the current record, or a tied leader is already Lean Verified. This submission is listed as Claimed; no proof run starts.'})
-            continue
-        login = request['issue_submitter_login'].lower()
-        if login in authors:
-            marker = f"<!-- bos-author-cap-v1 {issue['number']} {digest} -->"
-            if not any(is_bot(c) and c.get('body', '').startswith(marker) for c in comments):
-                api(f"issues/{issue['number']}/comments", {'body': marker + '\nThis account already has a queued submission in this batch. This submission remains Claimed.'})
-            continue
-        if len(selected) >= 10:
-            continue
-        authors.add(login)
-        request['record_gate'] = record
-        Path(f"requests/{issue['number']}.json").write_text(canonical(request) + '\n')
-        selected.append({'issue_number': issue['number'], 'login': login, 'slot': execution_slot(login)})
-    with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
-        out.write('selected=' + ('true' if selected else 'false') + '\n')
-        out.write('matrix=' + canonical({'include': selected}) + '\n')
+    deadline = time.monotonic() + 240
+    scanned = 0
+    while scanned < 40 and len(selected) < 10 and time.monotonic() < deadline:
+        page, offset = lease.state['page'], lease.state['offset']
+        batch = api(f'issues?state=open&sort=created&direction=asc&per_page=50&page={page}')
+        if offset >= len(batch):
+            lease.state.update(page=1, offset=0)
+            lease.save()
+            break
+        for index in range(offset, len(batch)):
+            if scanned >= 40 or len(selected) >= 10 or time.monotonic() >= deadline:
+                return
+            issue = batch[index]
+            # Persist after each bounded candidate, including invalid submissions.
+            lease.state.update(page=page if index+1 < 50 else page+1, offset=(index+1) % 50)
+            scanned += 1
+            try:
+                login = issue['user']['login'].lower()
+                if login in authors:
+                    continue
+                # One bounded comments page; do not walk attacker-sized threads.
+                comments = api(f"issues/{issue['number']}/comments?per_page=100&page=1")
+                if 'pull_request' in issue:
+                    request = pr.select_candidate(issue, comments)
+                    if request is None:
+                        continue
+                    route = 'pull_request'
+                else:
+                    try:
+                        submission = issue_input(issue)
+                    except ValueError:
+                        continue
+                    if submission is None:
+                        continue
+                    request = issue_request(issue, submission)
+                    digest = request['submission_sha256']
+                    if any(is_bot(c) and c.get('body', '').startswith(marker_for(issue['number'], digest, request['issue_body_sha256'])) for c in comments):
+                        continue
+                    record = current_record(submission['problem'], request['issue_url'])
+                    if not qualifies_for_run(submission, record):
+                        marker = f"<!-- bos-claimed-v1 {issue['number']} {digest} -->"
+                        if not any(is_bot(c) and c.get('body', '').startswith(marker) for c in comments):
+                            api(f"issues/{issue['number']}/comments", {'body': marker + '\nThis submission is listed as Claimed; the bound does not qualify for a proof run.'})
+                        continue
+                    request['record_gate'] = record
+                    route = 'issue'
+                authors.add(login)
+                Path(f"requests/{issue['number']}.json").write_text(canonical(request) + '\n')
+                selected.append({'issue_number': issue['number'], 'login': login, 'route': route})
+                selection_outputs(selected)
+            finally:
+                lease.save()
+        if len(batch) < 50:
+            lease.state.update(page=1, offset=0)
+            lease.save()
+            break
 
 
 def materialize():
@@ -291,6 +355,8 @@ def materialize():
 
 
 def preflight():
+    import queue_lease
+    queue_lease.assert_owner()
     # Recheck just before setup/compilation in case a runner was queued or the
     # site's current record advanced after batch selection.
     selected = json.loads(Path('request/request.json').read_text())

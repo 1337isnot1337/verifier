@@ -30,11 +30,27 @@ on:
         type: string
 permissions:
   contents: read
-concurrency:
-  group: bos-proof-slot-0
-  cancel-in-progress: false
 jobs:
+  admission:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    outputs:
+      admitted: ${{ steps.lease.outputs.admitted }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - id: lease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/queue_lease.py acquire
   verify:
+    needs: admission
+    if: needs.admission.outputs.admitted == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 350
     steps:
@@ -42,6 +58,10 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+      - name: Confirm this run still owns admission
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/queue_lease.py check
       - name: Test trusted controller
         run: python3 -m unittest discover -s tests -v
       - name: Validate inputs and fetch source at the pin

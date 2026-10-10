@@ -1,16 +1,13 @@
 name: Publish submission PR result
 on:
   workflow_run:
-    workflows: [Verify submission PR]
+    workflows: [Verify direct submissions]
     types: [completed]
 permissions:
   contents: write
   pull-requests: write
   issues: write
   actions: read
-concurrency:
-  group: bos-pr-publisher-${{ github.event.workflow_run.id }}
-  cancel-in-progress: false
 jobs:
   publish:
     runs-on: ubuntu-latest
@@ -24,11 +21,11 @@ jobs:
       - name: Validate artifact, run identity, complete diff, and immutable head
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/pr_submissions.py publish_pr
+        run: python3 scripts/pr_submissions.py publish_batch
       - if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: pr-submission-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}-publisher-${{ github.run_id }}-${{ github.run_attempt }}
-          path: published/pr-submission.json
+          path: published/
           if-no-files-found: error
           retention-days: 90

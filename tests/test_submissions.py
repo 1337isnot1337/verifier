@@ -6,13 +6,14 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 from datetime import datetime, timezone
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 import submissions as s
 import verifier as v
+import queue_lease
 from verdicts import kernel_outcome
 FIXTURE = ROOT / 'tests/fixtures/direct'
 
@@ -152,25 +153,25 @@ class SubmissionTests(unittest.TestCase):
             old = Path.cwd(); os.chdir(tmp)
             try:
                 Path('request').mkdir(); Path('request/request.json').write_text(json.dumps(selected))
-                with patch.dict(os.environ, GITHUB_OUTPUT=str(Path(tmp)/'output')), patch.object(s, 'api', return_value=issue()), patch.object(s, 'current_record', return_value={'score': '1/500', 'score_relation': 'attained'}):
+                with patch.dict(os.environ, GITHUB_OUTPUT=str(Path(tmp)/'output')), patch.object(queue_lease,'assert_owner'), patch.object(s, 'api', return_value=issue()), patch.object(s, 'current_record', return_value={'score': '1/500', 'score_relation': 'attained'}):
                     s.preflight()
                 self.assertIn('proceed=false', Path('output').read_text())
                 self.assertEqual(json.loads(Path('artifacts/gate.json').read_text())['status'], 'claimed_only')
             finally: os.chdir(old)
 
     def test_queue_cap_and_non_improvement_reply(self):
-        issues=[issue(i,'author'+str(i)) for i in range(1,13)]+[issue(13,'author1'),issue(14,'other',bound='1/10000')]
+        issues=[issue(13,'author1')]+[issue(i,'author'+str(i)) for i in range(1,13)]+[issue(14,'other',bound='1/10000')]
         posts=[]
         record={'score':'1/2000','score_relation':'attained'}
         with tempfile.TemporaryDirectory() as tmp:
             old=Path.cwd();os.chdir(tmp)
             try:
-                with patch.dict(os.environ,GITHUB_OUTPUT=str(Path(tmp)/'output')),patch.object(s,'pages',side_effect=lambda p:issues if p.startswith('issues?') else []),patch.object(s,'current_record',return_value=record),patch.object(s,'api',side_effect=lambda p,data:posts.append(data)):
+                with patch.dict(os.environ,GITHUB_OUTPUT=str(Path(tmp)/'output')),patch.object(queue_lease,'acquire',return_value=Mock(state={'page':1,'offset':0})),patch.object(s,'current_record',return_value=record),patch.object(s,'api',side_effect=lambda p,data=None: posts.append(data) if data is not None else issues if p.startswith('issues?') else []):
                     s.select()
                 self.assertEqual(len(list(Path('requests').glob('*.json'))),10)
-                self.assertFalse(Path('requests/13.json').exists())
-                self.assertTrue(any('already has a queued' in p['body'] for p in posts))
-                self.assertTrue(any('below the current record' in p['body'] for p in posts))
+                self.assertTrue(Path('requests/13.json').exists())
+                self.assertFalse(Path('requests/1.json').exists())
+                self.assertEqual(posts,[])  # The selector stops as soon as ten are selected.
             finally:os.chdir(old)
 
     def test_queue_bot_identity_and_raw_body_binding(self):
@@ -181,7 +182,7 @@ class SubmissionTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmp:
                 old=Path.cwd();os.chdir(tmp)
                 try:
-                    with patch.dict(os.environ,GITHUB_OUTPUT=str(Path(tmp)/'output')),patch.object(s,'pages',side_effect=lambda p:[item] if p.startswith('issues?') else [comment]),patch.object(s,'current_record',return_value={'score':'1/2000','score_relation':'attained'}):s.select()
+                    with patch.dict(os.environ,GITHUB_OUTPUT=str(Path(tmp)/'output')),patch.object(queue_lease,'acquire',return_value=Mock(state={'page':1,'offset':0})),patch.object(s,'api',side_effect=lambda p:[item] if p.startswith('issues?') else [comment]),patch.object(s,'current_record',return_value={'score':'1/2000','score_relation':'attained'}):s.select()
                     self.assertEqual(Path('requests/42.json').exists(),expected)
                 finally:os.chdir(old)
 

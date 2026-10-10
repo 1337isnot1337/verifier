@@ -124,15 +124,15 @@ class PRTests(unittest.TestCase):
         with self.assertRaises(ValueError):p.read_archive(raw,{'digest':'sha256:'+p.digest(raw)})
 
     def test_run_identity_and_fixture_rejection(self):
-        run={'repository':{'full_name':s.REPOSITORY},'head_repository':{'full_name':'alice/verifier'},
-             'head_sha':'a'*40,'path':p.WORKFLOW,'event':'pull_request','status':'completed','workflow_id':55}
+        run={'repository':{'full_name':s.REPOSITORY},'head_repository':{'full_name':s.REPOSITORY},
+             'head_sha':'b'*40,'head_branch':'main','path':p.WORKFLOW,'event':'schedule','status':'completed','workflow_id':55}
         with patch.object(p,'api',return_value={'id':55}):
             p.validate_run(run,self.request(),self.pr)
-            for key,value in [('head_sha','0'*40),('event','workflow_dispatch'),('path','.github/workflows/evil.yml')]:
+            for key,value in [('head_sha','0'*40),('event','pull_request'),('path','.github/workflows/evil.yml')]:
                 with self.assertRaises(ValueError):p.validate_run(dict(run,**{key:value}),self.request(),self.pr)
             with self.assertRaises(ValueError):p.validate_run(run,dict(self.request(),test_only=True),self.pr)
 
-    def publish_fixture(self, mutate_pr=None, unsafe=False, conclusion='success', omit_receipt=False, publisher_attempt='2'):
+    def publish_fixture(self, mutate_pr=None, unsafe=False, conclusion='success', omit_receipt=False, publisher_attempt='2', change_before_close=False, run_event='schedule', artifact_size=None):
         request=self.request();receipt=self.receipt();buf=io.BytesIO()
         with zipfile.ZipFile(buf,'w') as z:
             z.writestr('pr-request.json',json.dumps(request))
@@ -140,16 +140,23 @@ class PRTests(unittest.TestCase):
         raw=buf.getvalue();calls=[]
         pr=copy.deepcopy(self.pr)
         if mutate_pr:mutate_pr(pr)
-        run={'id':123,'run_attempt':1,'repository':{'full_name':s.REPOSITORY},'head_repository':{'full_name':'alice/verifier'},'head_sha':'a'*40,'path':p.WORKFLOW,'event':'pull_request','status':'completed','workflow_id':55,'conclusion':conclusion}
+        run={'id':123,'run_attempt':1,'repository':{'full_name':s.REPOSITORY},'head_repository':{'full_name':s.REPOSITORY},'head_sha':'b'*40,'head_branch':'main','path':p.WORKFLOW,'event':'schedule','status':'completed','workflow_id':55,'conclusion':conclusion}
+        run['event']=run_event
+        pr_reads=0
         def api(path,data=None,method=None,raw=False):
+            nonlocal pr_reads
             if data is not None:
                 calls.append((path,data,method))
                 return {'merged':True,'sha':'d'*40} if path.endswith('/merge') else {}
             if path=='actions/runs/123':return run
-            if path=='actions/runs/123/artifacts?per_page=100':return {'artifacts':[{'id':99,'name':'pr-verification-123-1','expired':False,'digest':'sha256:'+p.digest(buf.getvalue())}]}
+            if path=='actions/runs/123/artifacts?per_page=100':return {'artifacts':[{'id':99,'name':'pr-verification-123-1-7','size_in_bytes':len(buf.getvalue()) if artifact_size is None else artifact_size,'expired':False,'digest':'sha256:'+p.digest(buf.getvalue())}]}
             if path=='actions/artifacts/99/zip':return buf.getvalue()
-            if path=='pulls/7':return pr
-            if path=='actions/workflows/pr-verify.yml':return {'id':55}
+            if path=='pulls/7':
+                pr_reads+=1
+                if change_before_close and pr_reads>1:
+                    pr['head']['sha']='e'*40
+                return pr
+            if path=='actions/workflows/submissions.yml':return {'id':55}
             raise AssertionError(path)
         with tempfile.TemporaryDirectory() as tmp:
             old=Path.cwd();os.chdir(tmp)
@@ -157,7 +164,7 @@ class PRTests(unittest.TestCase):
                 event=Path('event.json');event.write_text(json.dumps({'workflow_run':{'id':123,'run_attempt':1}}))
                 with patch.dict(os.environ,GITHUB_EVENT_PATH=str(event),GITHUB_SHA='b'*40,GITHUB_RUN_ID='456',GITHUB_RUN_ATTEMPT=publisher_attempt),patch.object(p,'api',side_effect=api),patch.object(p,'inspect_pr',return_value=dict(request,head_sha=pr['head']['sha'])),patch.object(p,'validate_controller',side_effect=p.LayoutError('protected workflow changed') if unsafe else None):
                     p.publish_pr()
-                result=json.loads(Path('published/pr-submission.json').read_text())
+                result=json.loads(Path('published/pr-submission-7.json').read_text())
                 return result,calls
             finally:os.chdir(old)
 
@@ -207,15 +214,33 @@ class PRTests(unittest.TestCase):
         self.assertFalse(any(c[0].endswith('/merge') for c in calls))
         self.assertTrue(any(c[2]=='PATCH' and c[1]=={'state':'closed'} for c in calls))
 
+    def test_close_rechecks_head_after_rejection(self):
+        result,calls=self.publish_fixture(unsafe=True,change_before_close=True)
+        self.assertEqual(result['disposition'],'keep_open')
+        self.assertIn('close skipped',result['reason'])
+        self.assertFalse(any(c[2]=='PATCH' for c in calls))
+
+    def test_untrusted_run_and_oversized_metadata_reject_before_download(self):
+        with self.assertRaisesRegex(ValueError,'Untrusted'):
+            self.publish_fixture(run_event='pull_request')
+        with self.assertRaisesRegex(ValueError,'API size'):
+            self.publish_fixture(artifact_size=p.MAX_ARCHIVE+1)
+
+    def test_stream_download_has_hard_cap_without_content_length(self):
+        stream=io.BytesIO(b'x'*1025);stream.headers={}
+        with patch.object(p,'MAX_ARCHIVE',1024),self.assertRaisesRegex(ValueError,'download limit'):
+            p.bounded_read(stream)
+        self.assertEqual(stream.tell(),1025)
+        stream=io.BytesIO(b'small');stream.headers={'Content-Length':'1025'}
+        with patch.object(p,'MAX_ARCHIVE',1024),self.assertRaises(ValueError):p.bounded_read(stream)
+        self.assertEqual(stream.tell(),0)
+
     def test_cancelled_run_stays_open_labeled(self):
         result,calls=self.publish_fixture(conclusion='cancelled')
         self.assertEqual(result['disposition'],'keep_open')
         self.assertTrue(any(c[0]=='issues/7/labels' for c in calls))
         self.assertFalse(any(c[2]=='PATCH' for c in calls))
 
-    def test_cross_route_slots_are_bounded_and_case_insensitive(self):
-        self.assertEqual(s.execution_slot('Alice'),s.execution_slot('alice'))
-        self.assertTrue(all(0<=s.execution_slot('author'+str(i))<10 for i in range(1000)))
 
 
 if __name__=='__main__':unittest.main()

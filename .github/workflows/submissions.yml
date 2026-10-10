@@ -6,17 +6,16 @@ on:
     - cron: '17,47 * * * *'
   workflow_dispatch:
 permissions: {}
-# One issue batch at a time; shared execution slots cap both submission routes.
-concurrency:
-  group: bos-issue-batch
-  cancel-in-progress: false
 jobs:
   select:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
-      contents: read
+      contents: write
       issues: write
+      pull-requests: read
+      actions: read
     outputs:
       selected: ${{ steps.select.outputs.selected }}
       matrix: ${{ steps.select.outputs.matrix }}
@@ -26,20 +25,18 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
       - id: select
+        continue-on-error: true
         name: Select up to ten record challenges from distinct accounts
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/submissions.py select
-      - if: steps.select.outputs.selected == 'true'
+      - if: always() && steps.select.outputs.selected == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: direct-requests-${{ github.run_id }}-${{ github.run_attempt }}
           path: requests/
           retention-days: 90
   check:
-    concurrency:
-      group: bos-submitter-${{ matrix.login }}
-      cancel-in-progress: false
     needs: select
     if: needs.select.outputs.selected == 'true'
     strategy:
@@ -49,8 +46,9 @@ jobs:
     permissions:
       contents: read
       issues: write
+      pull-requests: read
       actions: read
     uses: ./.github/workflows/submission-check.yml
     with:
       issue_number: ${{ matrix.issue_number }}
-      slot: ${{ matrix.slot }}
+      route: ${{ matrix.route }}
