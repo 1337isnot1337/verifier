@@ -1,5 +1,7 @@
 """Default-branch admission lease. Fork read tokens cannot change this ref."""
 import argparse
+import base64
+import hashlib
 import json
 import os
 import urllib.error
@@ -21,6 +23,48 @@ class Lease:
         else:
             s.api('git/refs', {'ref': 'refs/' + REF, 'sha': commit})
         self.sha = commit
+
+    def admitted(self, key):
+        path = admission_path(key)
+        try:
+            item = s.api(f'contents/{path}?ref={self.sha}')
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                return False
+            raise
+        if item.get('type') != 'file' or not 0 < item.get('size', 0) <= 1024:
+            raise ValueError('Invalid admission state record')
+        raw = base64.b64decode(item['content'], validate=False)
+        if len(raw) > 1024:
+            raise ValueError('Oversized admission state record')
+        value = json.loads(raw)
+        if value.get('schema_version') != 1 or value.get('key') != key:
+            raise ValueError('Mismatched admission state record')
+        return True
+
+    def reserve(self, key):
+        # Persist before emitting runnable outputs. Never evict old keys: doing
+        # so could cause unchanged rejected proofs to consume capacity again.
+        value = {'schema_version': 1, 'key': key, 'run_id': self.state['run_id'],
+                 'run_attempt': self.state['run_attempt']}
+        self.tree = s.api('git/trees', {'base_tree': self.tree, 'tree': [
+            {'path': admission_path(key), 'mode': '100644', 'type': 'blob',
+             'content': s.canonical(value) + '\n'}]})['sha']
+        self.save()
+
+
+def admission_key(request):
+    if request.get('route') == 'pull_request':
+        identity = ['pull_request', request['pr_number'], request['head_sha']]
+    else:
+        identity = ['issue', request['issue_number'], request['submission_sha256'], request['issue_body_sha256']]
+    return hashlib.sha256(s.canonical(identity).encode()).hexdigest()
+
+
+def admission_path(key):
+    if len(key) != 64 or any(c not in '0123456789abcdef' for c in key):
+        raise ValueError('Invalid admission key')
+    return f'admitted/{key[:2]}/{key}.json'
 
 
 def acquire():

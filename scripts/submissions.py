@@ -308,7 +308,7 @@ def select_bounded():
                 # One bounded comments page; do not walk attacker-sized threads.
                 comments = api(f"issues/{issue['number']}/comments?per_page=100&page=1")
                 if 'pull_request' in issue:
-                    request = pr.select_candidate(issue, comments)
+                    request = pr.select_candidate(issue, lease)
                     if request is None:
                         continue
                     route = 'pull_request'
@@ -321,7 +321,7 @@ def select_bounded():
                         continue
                     request = issue_request(issue, submission)
                     digest = request['submission_sha256']
-                    if any(is_bot(c) and c.get('body', '').startswith(marker_for(issue['number'], digest, request['issue_body_sha256'])) for c in comments):
+                    if lease.admitted(queue_lease.admission_key(request)):
                         continue
                     record = current_record(submission['problem'], request['issue_url'])
                     if not qualifies_for_run(submission, record):
@@ -331,6 +331,7 @@ def select_bounded():
                         continue
                     request['record_gate'] = record
                     route = 'issue'
+                lease.reserve(queue_lease.admission_key(request))
                 authors.add(login)
                 Path(f"requests/{issue['number']}.json").write_text(canonical(request) + '\n')
                 selected.append({'issue_number': issue['number'], 'login': login, 'route': route})

@@ -166,7 +166,7 @@ class SubmissionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             old=Path.cwd();os.chdir(tmp)
             try:
-                with patch.dict(os.environ,GITHUB_OUTPUT=str(Path(tmp)/'output')),patch.object(queue_lease,'acquire',return_value=Mock(state={'page':1,'offset':0})),patch.object(s,'current_record',return_value=record),patch.object(s,'api',side_effect=lambda p,data=None: posts.append(data) if data is not None else issues if p.startswith('issues?') else []):
+                with patch.dict(os.environ,GITHUB_OUTPUT=str(Path(tmp)/'output')),patch.object(queue_lease,'acquire',return_value=Mock(state={'page':1,'offset':0},admitted=Mock(return_value=False))),patch.object(s,'current_record',return_value=record),patch.object(s,'api',side_effect=lambda p,data=None: posts.append(data) if data is not None else issues if p.startswith('issues?') else []):
                     s.select()
                 self.assertEqual(len(list(Path('requests').glob('*.json'))),10)
                 self.assertTrue(Path('requests/13.json').exists())
@@ -174,15 +174,15 @@ class SubmissionTests(unittest.TestCase):
                 self.assertEqual(posts,[])  # The selector stops as soon as ten are selected.
             finally:os.chdir(old)
 
-    def test_queue_bot_identity_and_raw_body_binding(self):
+    def test_comment_markers_are_not_admission_state(self):
         item=issue();request=s.issue_request(item,s.issue_input(item))
         marker=s.marker_for(42,request['submission_sha256'],request['issue_body_sha256'])
-        for login,expected in [('attacker',True),('github-actions[bot]',False)]:
+        for login,expected in [('attacker',True),('github-actions[bot]',True)]:
             comment={'user':{'login':login,'type':'Bot' if 'bot' in login else 'User'},'body':marker}
             with tempfile.TemporaryDirectory() as tmp:
                 old=Path.cwd();os.chdir(tmp)
                 try:
-                    with patch.dict(os.environ,GITHUB_OUTPUT=str(Path(tmp)/'output')),patch.object(queue_lease,'acquire',return_value=Mock(state={'page':1,'offset':0})),patch.object(s,'api',side_effect=lambda p:[item] if p.startswith('issues?') else [comment]),patch.object(s,'current_record',return_value={'score':'1/2000','score_relation':'attained'}):s.select()
+                    with patch.dict(os.environ,GITHUB_OUTPUT=str(Path(tmp)/'output')),patch.object(queue_lease,'acquire',return_value=Mock(state={'page':1,'offset':0},admitted=Mock(return_value=False))),patch.object(s,'api',side_effect=lambda p:[item] if p.startswith('issues?') else [comment]),patch.object(s,'current_record',return_value={'score':'1/2000','score_relation':'attained'}):s.select()
                     self.assertEqual(Path('requests/42.json').exists(),expected)
                 finally:os.chdir(old)
 

@@ -245,10 +245,10 @@ def validate_controller(head, base):
                 raise LayoutError('PR workflow/controller differs from the trusted publisher revision')
 
 
-def select_candidate(issue, comments):
+def select_candidate(issue, lease):
+    import queue_lease
     pr = api(f"pulls/{issue['number']}")
-    marker = f"<!-- bos-pr-v2 {pr['number']} {pr['head']['sha']} -->"
-    if any(s.is_bot(c) and c.get('body', '').startswith(marker) for c in comments):
+    if lease.admitted(queue_lease.admission_key({'route': 'pull_request', 'pr_number': pr['number'], 'head_sha': pr['head']['sha']})):
         return None
     selected = {'schema_version': 2, 'route': 'pull_request', 'pr_number': pr['number'],
         'head_sha': pr['head']['sha'], 'base_sha': pr['base']['sha'],

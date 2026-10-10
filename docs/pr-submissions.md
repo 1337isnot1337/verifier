@@ -89,7 +89,22 @@ files and matrix outputs are written after each admission. A later API error
 therefore preserves earlier selections; subsequent scans resume at the saved
 cursor. Each scan reads at most one hundred comments per candidate. Page/offset
 pagination wraps to the start; deletion can shift an item into the next cycle.
-Lease-state writes have a separate fixed bound of two calls per candidate.
+Lease-state writes have a fixed bound of two calls per candidate, plus three
+calls when reserving an admission. Before emitting a runnable request, the
+scheduler stores a permanent reservation under
+`admitted/<key-prefix>/<key>.json` in the same CAS-protected state ref. Each
+JSON record is at most 1 KiB. The key hashes the route, submission number, and
+issue normalized/raw-body hashes or PR head SHA. Lookups fetch exactly that
+file at the immutable state commit; they never enumerate a growing ledger.
+Each update uses the prior tree and adds one file, preserving previous keys.
+There is no eviction that could make an old failed proof runnable again.
+
+Comment markers are display data, not proof deduplication authority. A marker
+hidden after hundreds of comments cannot cause a repeat proof job. Reservation
+also stops automatic replay after infrastructure failure; such submissions stay
+open for review. A crash after reservation but before dispatch fails closed:
+it does not erase the reservation or automatically spend proof capacity again.
+A changed issue request or new PR head has its own admission identity.
 
 Before deployment, set repository Actions fork approval to
 `all_external_contributors` (the strictest policy). This applies to fork-owned

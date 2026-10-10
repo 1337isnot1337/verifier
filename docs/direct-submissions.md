@@ -48,10 +48,12 @@ run together on standard runners. Additional submissions remain Claimed for a
 later scan. The scan has entry, API and time budgets, persists its page cursor,
 and writes selections incrementally. See the PR design for lease and scan details.
 
-The schedule rescans open issues. A processed marker binds both the normalized
-submission hash and raw issue body hash. Only the GitHub Actions bot's marker
-counts. The publisher uploads the result artifact before posting that marker,
-so an artifact upload failure leaves the request eligible for recovery.
+The schedule rescans open issues. The trusted state ref reserves each issue
+number with its normalized submission hash and raw issue body hash before
+dispatch. A direct bounded file lookup prevents repeat proof jobs, regardless
+of comment count. Comment markers are display data, not deduplication authority.
+Reservations remain after proof or infrastructure failure; review handles an
+interrupted admission without an automatic retry loop.
 
 ## Security boundary
 

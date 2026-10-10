@@ -28,6 +28,8 @@ Keep proof execution and result publication on separate fresh runners.
 Never execute submission code in a job with write permission or secrets.
 Use the trusted scheduler lease for a shared batch of ten distinct accounts.
 Never rely on Actions concurrency groups that fork YAML can name.
+Reserve issue request hashes and PR heads in the trusted CAS state before
+emitting runnable requests. Never deduplicate proof jobs from comment markers.
 Poll PR source data from default-branch code; no pull_request or
 pull_request_target workflow may select or verify trusted submissions. The workflow_run publisher checks only trusted code and
 artifact data. Recheck the complete added-only folder diff, file modes,
