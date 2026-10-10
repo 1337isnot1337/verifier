@@ -284,6 +284,9 @@ def select_bounded():
     lease = queue_lease.acquire()
     if lease is None:
         return
+    import smoke
+    if smoke.dispatch(lease):
+        return
     Path('requests').mkdir(exist_ok=True)
     deadline = time.monotonic() + 240
     scanned = 0
@@ -349,7 +352,7 @@ def materialize():
     if not re.fullmatch('[1-9][0-9]*', number):
         raise ValueError('Invalid issue number')
     selected = json.loads(Path(f'requests/{number}.json').read_text())
-    if selected['issue_number'] != int(number) or selected.get('test_only') is not False:
+    if selected['issue_number'] != int(number) or (selected.get('test_only') is not False and not __import__('smoke').active(selected)):
         raise ValueError('Issue identity mismatch or test fixture')
     Path('request').mkdir(exist_ok=True)
     Path('request/request.json').write_text(canonical(selected) + '\n')
@@ -366,9 +369,12 @@ def preflight():
         candidate = issue_input(current)
     except ValueError:
         candidate = None
+    smoke_test = __import__('smoke').active(selected)
+    if smoke_test and candidate is not None:
+        candidate = __import__('smoke').issue_submission(candidate)
     proceed = candidate == selected['submission'] and body_hash(current['body']) == selected['issue_body_sha256']
-    record = current_record(selected['submission']['problem'], selected['issue_url'])
-    proceed = proceed and qualifies_for_run(selected['submission'], record)
+    record = selected['record_gate'] if smoke_test else current_record(selected['submission']['problem'], selected['issue_url'])
+    proceed = proceed and (smoke_test or qualifies_for_run(selected['submission'], record))
     selected['record_gate'] = record
     Path('request/request.json').write_text(canonical(selected) + '\n')
     with open(os.environ['GITHUB_OUTPUT'], 'a') as out:

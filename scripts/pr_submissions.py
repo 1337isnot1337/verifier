@@ -269,7 +269,7 @@ def materialize_pr():
     if not re.fullmatch('[1-9][0-9]*', number):
         raise ValueError('Invalid PR number')
     selected = json.loads(Path(f'requests/{number}.json').read_text())
-    if selected['pr_number'] != int(number) or selected.get('test_only') is not False:
+    if selected['pr_number'] != int(number) or (selected.get('test_only') is not False and not __import__('smoke').active(selected)):
         raise ValueError('PR identity mismatch or fixture')
     Path('pr-input').mkdir(exist_ok=True)
     Path('pr-input/pr-request.json').write_text(s.canonical(selected) + '\n')
@@ -284,9 +284,10 @@ def preflight_pr():
         selected.update(gate='superseded', reason='PR changed before compilation')
     elif selected.get('gate') == 'ready':
         inspect_pr(pr, selected['manifest_utf8'].encode())
-        record = s.current_record(selected['submission']['problem'], selected['pr_url'])
+        smoke_test = __import__('smoke').active(selected)
+        record = selected['record_gate'] if smoke_test else s.current_record(selected['submission']['problem'], selected['pr_url'])
         selected['record_gate'] = record
-        if not s.qualifies_for_run(selected['submission'], record):
+        if not smoke_test and not s.qualifies_for_run(selected['submission'], record):
             selected.update(gate='claimed_only', reason='record_changed_before_compilation')
     Path('artifacts').mkdir(exist_ok=True)
     Path('artifacts/pr-request.json').write_text(s.canonical(selected) + '\n')
@@ -359,7 +360,7 @@ def validate_run_identity(run):
 
 def validate_run(run, request, pr):
     validate_run_identity(run)
-    if request.get('test_only') is not False or request.get('route') != 'pull_request' or request.get('pr_number') != pr['number']:
+    if (request.get('test_only') is not False and not __import__('smoke').active(request)) or request.get('route') != 'pull_request' or request.get('pr_number') != pr['number']:
         raise ValueError('Fixture or PR identity mismatch')
     if run.get('head_sha') != request['verifier_commit']:
         raise ValueError('Run controller revision mismatch')
@@ -445,8 +446,8 @@ def publish_pr(artifact_override=None):
         disposition, reason = 'close', str(exc)
     except ValueError as exc:
         disposition, reason = 'keep_open', str(exc)
-    envelope = {'schema_version': 2, 'route': 'pull_request', 'test_only': False,
-        'importable': disposition == 'merge', 'request': request, 'receipt': receipt,
+    envelope = {'schema_version': 2, 'route': 'pull_request', 'test_only': request.get('test_only', True),
+        'importable': disposition == 'merge' and request.get('test_only') is False, 'request': request, 'receipt': receipt,
         'run_id': str(run_id), 'run_attempt': str(attempt), 'verifier_commit': request['verifier_commit'],
         'run_url': f'https://github.com/{s.REPOSITORY}/actions/runs/{run_id}',
         'workflow_path': WORKFLOW, 'workflow_conclusion': run['conclusion'],
@@ -456,6 +457,8 @@ def publish_pr(artifact_override=None):
         'receipt_sha256': digest(files['receipt.json']) if 'receipt.json' in files else None,
         'disposition': disposition, 'reason': reason, 'merge_commit': None}
     comment = f"<!-- bos-pr-v2 {number} {request['head_sha']} -->\n" + f'PR proof result: **{disposition}**. {reason}.\n\n[Receipt and logs]({url})'
+    if request.get('test_only'):
+        comment += '\n\nTEST ONLY: this smoke result must never be imported.'
     if disposition == 'close' and receipt and receipt.get('kernels', {}).get('nanoda', {}).get('status') == 'rejected':
         comment += '\n\n@nmamano Nanoda rejected this proof; maintainer review is required.'
     # No proof output or unchecked issue text is posted.

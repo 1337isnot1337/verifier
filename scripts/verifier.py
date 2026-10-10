@@ -191,7 +191,9 @@ rev = "d13f23b723b8a846827a245b89c10fc7d3f11612"
 
 def prepare():
     ART.mkdir(exist_ok=True)
-    data = {'schema_version': 1, 'started_unix': time.time(), 'status': 'preparing',
+    selected_path = os.environ.get('BOS_REQUEST_PATH')
+    selected_flags = json.loads(Path(selected_path).read_text()) if selected_path else {}
+    data = {'schema_version': 1, 'test_only': selected_flags.get('test_only', False), 'started_unix': time.time(), 'status': 'preparing',
             'verifier_commit': os.environ.get('BOS_VERIFIER_COMMIT', os.environ.get('GITHUB_SHA')),
             'run_url': f"https://github.com/{os.environ.get('GITHUB_REPOSITORY', '')}/actions/runs/{os.environ.get('GITHUB_RUN_ID', '')}",
             'steps': [], 'kernels': {'lean': {'status': 'not_started'}, 'nanoda': {'status': 'not_started'}},

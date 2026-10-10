@@ -5,6 +5,16 @@ on:
   schedule:
     - cron: '17,47 * * * *'
   workflow_dispatch:
+    inputs:
+      smoke_route:
+        description: Maintainer-only fixed DFT smoke, never imported
+        type: choice
+        options: [none, issue, pull_request]
+        default: none
+      smoke_number:
+        description: Test issue or PR number (fixed DFT fixture only)
+        type: string
+        default: ''
 permissions: {}
 jobs:
   select:
