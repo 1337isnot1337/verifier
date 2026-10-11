@@ -30,7 +30,7 @@
 -    rw [Finset.card_eq_iff_eq_univ, Finset.eq_univ_iff_forall]
 -    simp only [Finset.mem_filter, Finset.mem_univ, true_and]
 +    rw [Fin.ext_iff]
-+    change ({i : Fin SC.n | I 0 i ≠ I (Fin.last m) i}.card = SC.n) ↔ _
++    change (({i : Fin SC.n | I 0 i ≠ I (Fin.last m) i} : Finset (Fin SC.n)).card = SC.n) ↔ _
 +    simpa only [Fintype.card_fin, Finset.eq_univ_iff_forall,
 +      Finset.mem_filter, Finset.mem_univ, true_and] using
 +      (Finset.card_eq_iff_eq_univ {i : Fin SC.n | I 0 i ≠ I (Fin.last m) i})

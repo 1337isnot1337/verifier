@@ -18,7 +18,7 @@ def kernel_outcome(kernel, code, output, systemd_result='', guard_stop=None):
         return {'status': 'incomplete', 'reason': 'out_of_memory' if systemd_result == 'oom-kill' else 'timeout'}
     # A nonzero Lean build with a located elaboration/parser diagnostic is a
     # source failure. Host resource evidence above always takes precedence.
-    diagnostics = re.findall(r"^error: ((?!(?:VerifierChallenge|VerifierAudit)\.lean:)[A-Za-z_][A-Za-z0-9_]*(?:/[A-Za-z_][A-Za-z0-9_]*)*\.lean:\d+:\d+: (?:Type mismatch|Application type mismatch|unsolved goals|Unknown identifier|Unknown constant|unknown identifier|unknown constant|unexpected token|unexpected end of input|Tactic|tactic|failed to synthesize|failed to compile definition)[^\n]*)", output, re.M)
+    diagnostics = re.findall(r"^error: ((?!(?:VerifierChallenge|VerifierAudit)\.lean:)[A-Za-z_][A-Za-z0-9_]*(?:/[A-Za-z_][A-Za-z0-9_]*)*\.lean:\d+:\d+: (?:Type mismatch|Application type mismatch|unsolved goals|Unknown identifier|Unknown constant|unknown identifier|unknown constant|unexpected token|unexpected end of input|Tactic|tactic|failed to synthesize|failed to compile definition|Invalid field)[^\n]*)", output, re.M)
     if kernel == 'lean' and code != 0 and 'error: build failed' in output and diagnostics:
         return {'status': 'rejected', 'reason': 'lean_compile_error',
                 'diagnostic': diagnostics[0][:500]}

@@ -120,6 +120,7 @@ class SubmissionTests(unittest.TestCase):
         self.assertEqual(outcome['reason'],'lean_compile_error')
         dep='error: FixedPointTheorems/cubical_sperner_prep.lean:790:4: failed to compile definition, consider marking it as noncomputable\nerror: build failed'
         self.assertEqual(kernel_outcome('lean',1,dep,'exit-code')['reason'],'lean_compile_error')
+        self.assertEqual(kernel_outcome('lean',1,dep.replace('failed to compile definition, consider marking it as noncomputable','Invalid field `card`'),'exit-code')['reason'],'lean_compile_error')
         self.assertEqual(kernel_outcome('lean',1,dep.replace('FixedPointTheorems/cubical_sperner_prep','VerifierChallenge'),'exit-code')['status'],'pending_review')
         self.assertEqual(outcome['status'],'rejected')
         self.assertEqual(kernel_outcome('lean',1,log,'oom-kill')['status'],'incomplete')
