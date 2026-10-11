@@ -68,3 +68,6 @@ resource limits, and no access to the token that posts results.
 See [issue security and layout](docs/direct-submissions.md),
 [PR security and receipt contract](docs/pr-submissions.md),
 [execution details](docs/execution.md), and [AGENTS.md](AGENTS.md).
+
+To propose a trusted statement for a problem that has none, see
+[the statement contribution guide](docs/new-statements.md).

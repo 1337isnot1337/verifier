@@ -46,3 +46,6 @@ Never check out fork workflow code. Keep action pins and strict input checks.
 Current phase: local review only. Do not create public repositories, push,
 open PRs, or publish the workflow until the lead confirms README approval.
 Tests under tests/fixtures/direct are test-only and must not enter site data.
+
+To propose a trusted statement for a problem that has none, see
+[the statement contribution guide](docs/new-statements.md).
