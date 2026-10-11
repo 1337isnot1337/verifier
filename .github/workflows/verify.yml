@@ -69,14 +69,31 @@ jobs:
       - name: Build pinned tools and fetch trusted Mathlib cache
         timeout-minutes: 45
         run: python3 scripts/verifier.py setup
-      - name: Fresh lake build, Comparator kernels, and axiom audit
-        run: python3 scripts/verifier.py verify
+      - name: Lean kernel and permitted-axiom audit
+        run: python3 scripts/verifier.py verify_lean
+      - name: Finalize early Lean receipt
+        if: always()
+        env:
+          BOS_RECEIPT_STAGE: lean
+        run: python3 scripts/verifier.py finalize
+      - name: Upload early Lean receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: verifier-receipt-and-logs-${{ github.run_id }}-${{ github.run_attempt }}-lean
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Advisory nanoda check
+        run: python3 scripts/verifier.py verify_nanoda
       - name: Finalize JSON receipt
         if: always()
+        env:
+          BOS_RECEIPT_STAGE: final
         run: python3 scripts/verifier.py finalize
       - name: Upload receipt and logs
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: verifier-receipt-and-logs-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/
