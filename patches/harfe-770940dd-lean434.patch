@@ -1,0 +1,39 @@
+--- a/FixedPointTheorems/cubical_sperner_prep.lean
++++ b/FixedPointTheorems/cubical_sperner_prep.lean
+@@ -787,7 +787,7 @@
+ }
+ 
+ 
+-def coord_change_count (v1 v2 : SC.G) := Finset.card {i | v1 i ≠ v2 i}
++noncomputable def coord_change_count (v1 v2 : SC.G) := Finset.card {i | v1 i ≠ v2 i}
+ 
+ lemma ccc_add {m} I (hs : simplex SC m I) (i1 i2 i3) (h1 : i1 ≤ i2 ∧ i2 ≤ i3) :
+     coord_change_count SC (I i1) (I i3) =
+@@ -842,7 +842,7 @@
+   apply h2
+ }
+ 
+-def ccc_fun {m} (I : Fin (m+1)→ SC.G) (i : Fin (m+1)) : Fin (SC.n + 1 )
++noncomputable def ccc_fun {m} (I : Fin (m+1)→ SC.G) (i : Fin (m+1)) : Fin (SC.n + 1 )
+     := ⟨ coord_change_count SC (I 0) (I i), by {
+       refine Nat.lt_succ_of_le ?_
+       exact card_finset_fin_le {i_1 | I 0 i_1 ≠ I i i_1}
+@@ -870,13 +870,11 @@
+ lemma ccc_fun_case_D_iff {m} I (hs : simplex SC m I) :
+     case_D SC I ↔ ccc_fun SC I (Fin.last m) = Fin.last SC.n := by {
+   have h1 : (ccc_fun SC I (Fin.last m) = Fin.last SC.n) ↔ ∀ k, I 0 k ≠ I (Fin.last m) k  := by {
+-    unfold ccc_fun coord_change_count
+-    rw [Fin.mk.inj_iff]
+-    have h3 : SC.n = Fintype.card (Fin SC.n) := by {exact Eq.symm (Fintype.card_fin SC.n)}
+-    simp only [ne_eq, Fin.val_last]
+-    nth_rewrite 7 [h3]
+-    rw [Finset.card_eq_iff_eq_univ, Finset.eq_univ_iff_forall]
+-    simp only [Finset.mem_filter, Finset.mem_univ, true_and]
++    rw [Fin.ext_iff]
++    change ({i : Fin SC.n | I 0 i ≠ I (Fin.last m) i}.card = SC.n) ↔ _
++    simpa only [Fintype.card_fin, Finset.eq_univ_iff_forall,
++      Finset.mem_filter, Finset.mem_univ, true_and] using
++      (Finset.card_eq_iff_eq_univ {i : Fin SC.n | I 0 i ≠ I (Fin.last m) i})
+   }
+   apply Iff.trans _ h1.symm
+   unfold case_D

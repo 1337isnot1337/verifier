@@ -231,7 +231,7 @@ def inspect_pr(pr, manifest_bytes=None):
 
 def protected_files():
     """Executable/config trust boundary; submission additions are excluded."""
-    return sorted(str(p.relative_to(ROOT)) for parent in ['.github/workflows', 'scripts', 'profiles', 'challenges']
+    return sorted(str(p.relative_to(ROOT)) for parent in ['.github/workflows', 'scripts', 'profiles', 'challenges', 'patches']
                   for p in (ROOT / parent).rglob('*') if p.is_file() and '__pycache__' not in p.parts)
 
 

@@ -218,6 +218,12 @@ def prepare():
     for index, dep in enumerate(dependencies):
         location = WORK / f'solution-dependency-{index}'
         clone(dep['repo_url'], dep['commit'], location, f'solution-dependency-{index}')
+        if dep.get('patch_file'):
+            patch_file = ROOT / dep['patch_file']
+            if digest(patch_file) != dep['patch_sha256']:
+                raise ValueError('solution compatibility patch digest mismatch')
+            command(['git', '-C', location, 'apply', '--check', patch_file], f'solution-dependency-{index}-patch-check')
+            command(['git', '-C', location, 'apply', patch_file], f'solution-dependency-{index}-patch')
         sources.append((location, dep.get('source_subdir', ''), dep['source_roots'], []))
     data = receipt(); data['solution_dependencies'] = dependencies; save(data)
     stage = WORK / 'stage'; stage.mkdir()

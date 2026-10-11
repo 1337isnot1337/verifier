@@ -23,3 +23,15 @@ the unchanged axiom list: propext, Classical.choice and Quot.sound.
 The run uses the existing pinned Lean 4.34.1 and Mathlib dependencies. The
 fixed-point project's own older toolchain is not used. Compatibility and the
 axiom audit must pass on GitHub Actions before this record is verified.
+
+## Lean 4.34.1 compatibility patch
+
+OpenAI's own pinned `lean/lean-toolchain` specifies 4.34.1 and its manifest pins
+harfe at the revision above. That harfe revision declares 4.32.0 and fails a
+fresh build with the verifier's 4.34.1 dependencies. The public diff
+[harfe-770940dd-lean434.patch](../../patches/harfe-770940dd-lean434.patch)
+adds two `noncomputable` markers and replaces the proof of a finite-cardinality
+rewrite. It changes no theorem statement or allowed axiom. The profile pins the
+patch SHA-256; the controller checks it before applying the diff to the untrusted
+solution checkout. Receipts include the patch path/hash and patched source hashes.
+The compatibility patch still needs to pass the same kernel and axiom checks.

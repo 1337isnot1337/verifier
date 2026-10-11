@@ -34,7 +34,7 @@ class SolutionDependencyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); event = root / 'event.json'; event.write_text(json.dumps({'inputs': request}))
             with patch.object(v, 'ART', root / 'artifacts'), patch.object(v, 'WORK', root / 'work'), \
-                 patch.object(v, 'clone', side_effect=clone), patch.object(v.subprocess, 'check_output', side_effect=tree), \
+                 patch.object(v, 'command') as commands, patch.object(v, 'clone', side_effect=clone), patch.object(v.subprocess, 'check_output', side_effect=tree), \
                  patch.dict(os.environ, GITHUB_EVENT_PATH=str(event)):
                 v.prepare()
                 receipt = v.receipt()
@@ -44,6 +44,10 @@ class SolutionDependencyTests(unittest.TestCase):
                 self.assertEqual(set(hashes), {'OAI/LinearAlgebra/MatrixMultiplication/Main.lean', 'FixedPointTheorems/brouwer.lean'})
                 self.assertIn('FixedPointTheorems', (root / 'work/stage/lakefile.toml').read_text())
                 self.assertEqual(len(calls), 2)
+                self.assertEqual(commands.call_count, 2)
+                dep=receipt['solution_dependencies'][0]
+                self.assertEqual(v.digest(v.ROOT / dep['patch_file']),dep['patch_sha256'])
+                self.assertIn('--check',commands.call_args_list[0].args[0])
                 self.assertTrue(calls[0][2]['sparse_paths'])
                 control = json.loads((root / 'work/control/lean.json').read_text())
                 self.assertEqual(set(control['permitted_axioms']), {'propext', 'Classical.choice', 'Quot.sound'})
