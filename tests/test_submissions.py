@@ -118,6 +118,9 @@ class SubmissionTests(unittest.TestCase):
         log='error: Submission.lean:15:2: Type mismatch: After simplification\nerror: build failed'
         outcome=kernel_outcome('lean',1,log,'exit-code')
         self.assertEqual(outcome['reason'],'lean_compile_error')
+        dep='error: FixedPointTheorems/cubical_sperner_prep.lean:790:4: failed to compile definition, consider marking it as noncomputable\nerror: build failed'
+        self.assertEqual(kernel_outcome('lean',1,dep,'exit-code')['reason'],'lean_compile_error')
+        self.assertEqual(kernel_outcome('lean',1,dep.replace('FixedPointTheorems/cubical_sperner_prep','VerifierChallenge'),'exit-code')['status'],'pending_review')
         self.assertEqual(outcome['status'],'rejected')
         self.assertEqual(kernel_outcome('lean',1,log,'oom-kill')['status'],'incomplete')
         self.assertEqual(kernel_outcome('lean',1,'error: build failed','exit-code')['status'],'pending_review')
