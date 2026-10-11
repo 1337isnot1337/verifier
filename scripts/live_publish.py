@@ -14,6 +14,28 @@ def archive(artifact):
     return p.read_archive(raw,artifact)
 
 
+def issue_final_available(run, number):
+    """Read fresh run state, not the watcher's earlier artifact snapshot."""
+    current = p.api(f"actions/runs/{run['id']}")
+    if current['run_attempt'] != run['run_attempt'] or current['status'] == 'completed':
+        return True
+    names = {
+        f"verifier-receipt-and-logs-{run['id']}-{run['run_attempt']}-{number}",
+        f"direct-submission-{run['id']}-{run['run_attempt']}-{number}",
+    }
+    page = 1
+    while True:
+        artifacts = p.api(f"actions/runs/{run['id']}/artifacts?per_page=100&page={page}")['artifacts']
+        if any(a['name'] in names for a in artifacts):
+            return True
+        if len(artifacts) < 100:
+            return False
+        page += 1
+        if page > 10:
+            # Fail closed if an unexpected run has too many artifacts to inspect.
+            return True
+
+
 def publish_issue(run, artifact):
     files=archive(artifact)
     selected=json.loads(files['selected-request.json'])
@@ -37,11 +59,16 @@ def publish_issue(run, artifact):
     env.update(verification_stage='lean',receipt_sha256=p.digest(files['receipt.json']),
         receipt_artifact={'id':artifact['id'],'name':artifact['name'],'digest':artifact['digest'],'archive_url':url},
         publisher_commit=os.environ['GITHUB_SHA'],publisher_run_id=os.environ['GITHUB_RUN_ID'],publisher_run_attempt=os.environ['GITHUB_RUN_ATTEMPT'],workflow_conclusion=run['conclusion'])
+    if issue_final_available(run, number):
+        return
     Path('published').mkdir(exist_ok=True)
     Path(f'published/direct-submission-{number}-lean.json').write_text(s.canonical(env)+'\n')
     status='Lean Verified' if env['verification_status']=='passed' else env['verification_status']
     if selected.get('test_only'):status='TEST ONLY: '+status+' (never imported)'
-    p.api(f'issues/{number}/comments',{'body':f"{status}. Nanoda advisory check is pending.\n\n[Lean receipt and logs]({url})"})
+    # GitHub has no atomic artifact-check/comment-write operation. Describe the
+    # immutable checkpoint, never current nanoda status: final publication can
+    # race the last API read without making this historical statement false.
+    p.api(f'issues/{number}/comments',{'body':f"Lean checkpoint recorded: {status}. This checkpoint does not include the final nanoda result.\n\n[Lean checkpoint receipt and logs]({url}) · [Current workflow results](https://github.com/{s.REPOSITORY}/actions/runs/{run['id']})"})
 
 
 def watch():
