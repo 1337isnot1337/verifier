@@ -24,14 +24,23 @@ The run uses the existing pinned Lean 4.34.1 and Mathlib dependencies. The
 fixed-point project's own older toolchain is not used. Compatibility and the
 axiom audit must pass on GitHub Actions before this record is verified.
 
-## Lean 4.34.1 compatibility patch
+## OpenAI's pinned dependency patch
 
-OpenAI's own pinned `lean/lean-toolchain` specifies 4.34.1 and its manifest pins
-harfe at the revision above. That harfe revision declares 4.32.0 and fails a
-fresh build with the verifier's 4.34.1 dependencies. The public diff
-[harfe-770940dd-lean434.patch](../../patches/harfe-770940dd-lean434.patch)
-adds two `noncomputable` markers and replaces the proof of a finite-cardinality
-rewrite. It changes no theorem statement or allowed axiom. The profile pins the
-patch SHA-256; the controller checks it before applying the diff to the untrusted
-solution checkout. Receipts include the patch path/hash and patched source hashes.
-The compatibility patch still needs to pass the same kernel and axiom checks.
+OpenAI's `lean/lakefile.lean` at the same commit applies
+`lean/patches/fixed-point-theorems-lean4341.patch` before dependency resolution.
+The raw harfe commit alone is not OpenAI's actual build input. We copy that
+[exact upstream patch](../../patches/openai-fd4aeeb-harfe-lean4341.patch)
+byte for byte, replacing our earlier partial compatibility patch. We apply the
+diff as data without executing OpenAI's Lake hooks or harfe's build files.
+
+The profile and receipt record the patch's source repository, commit, path and
+SHA-256. The staged source manifest hashes the patched Lean bytes. The original
+harfe pin remains part of the receipt. All nine shared package revisions match
+OpenAI's manifest, including Mathlib d13f23b723b8a846827a245b89c10fc7d3f11612.
+Both builds set autoImplicit=false. Harfe also sets pp.unicode.fun=true, a
+pretty-print option; our generated configuration uses the default presentation.
+OpenAI's other packages are outside the matrix proof's import closure.
+
+The dependency-only Actions job must compile the full FixedPointTheorems library
+before a new full Comparator run. A build is not proof admission: the exact
+trusted statement, Lean replay and permitted-axiom audit remain required.

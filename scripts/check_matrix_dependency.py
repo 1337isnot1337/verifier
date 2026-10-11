@@ -22,10 +22,10 @@ v.command(['sudo', 'systemd-run', '--wait', '--pipe', '--unit=bos-dependency-com
            '--property=CPUQuota=400%', '--property=MemoryMax=14G',
            '--property=MemorySwapMax=0', '--property=RuntimeMaxSec=900',
            '--property=TasksMax=512', *v.sandbox_args(),
-           str(v.toolchain_dir() / 'bin/lake'), 'build', 'FixedPointTheorems.brouwer'],
+           str(v.toolchain_dir() / 'bin/lake'), 'build', 'FixedPointTheorems'],
           'dependency-build')
 v.write_json(v.ART / 'dependency-check.json', {
     'test_only': True, 'importable': False, 'status': 'compiled',
-    'module': 'FixedPointTheorems.brouwer',
+    'module': 'FixedPointTheorems',
     'solution_dependencies': v.receipt()['solution_dependencies'],
     'note': 'Compilation only. No Comparator or axiom acceptance is claimed.'})

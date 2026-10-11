@@ -33,8 +33,11 @@
         "FixedPointTheorems"
       ],
       "license": "MIT",
-      "patch_file": "patches/harfe-770940dd-lean434.patch",
-      "patch_sha256": "3869c0852d564563f7d29bad972c87f032a07f8dac8300f9340106815233098e"
+      "patch_file": "patches/openai-fd4aeeb-harfe-lean4341.patch",
+      "patch_sha256": "d70872e41e80b25191538d1659c4aa3a001349b5bd16f806c9e3833a502516e5",
+      "patch_upstream_repo": "https://github.com/openai/math",
+      "patch_upstream_commit": "fd4aeeb2ee4fc729c18d98444fed42fd0529eeeb",
+      "patch_upstream_path": "lean/patches/fixed-point-theorems-lean4341.patch"
     }
   ]
 }
