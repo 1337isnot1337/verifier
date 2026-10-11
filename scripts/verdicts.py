@@ -1,4 +1,7 @@
 """Receipt admission policy, separate from process or workflow completion."""
+import re
+import html
+
 AXIOMS = {'propext', 'Classical.choice', 'Quot.sound'}
 
 
@@ -13,6 +16,12 @@ def kernel_outcome(kernel, code, output, systemd_result='', guard_stop=None):
         return {'status': 'incomplete', 'reason': 'disk_limit'}
     if systemd_result in ['oom-kill', 'timeout']:
         return {'status': 'incomplete', 'reason': 'out_of_memory' if systemd_result == 'oom-kill' else 'timeout'}
+    # A nonzero Lean build with a located elaboration/parser diagnostic is a
+    # source failure. Host resource evidence above always takes precedence.
+    diagnostics = re.findall(r"^error: ((?:Submission|OAI|Work|WHTCheck)(?:/[^:\n]+)?\.lean:\d+:\d+: (?:Type mismatch|Application type mismatch|unsolved goals|Unknown identifier|Unknown constant|unknown identifier|unknown constant|unexpected token|unexpected end of input|Tactic|tactic|failed to synthesize)[^\n]*)", output, re.M)
+    if kernel == 'lean' and code != 0 and 'error: build failed' in output and diagnostics:
+        return {'status': 'rejected', 'reason': 'lean_compile_error',
+                'diagnostic': diagnostics[0][:500]}
     if kernel == 'nanoda' and code != 0 and 'Nanoda kernel rejected the solution' in output and 'assertion failed: self.def_eq(u, v)' in output:
         return {'status': 'rejected', 'reason': 'nanoda_type_equality_rejection'}
     if kernel == 'lean' and code != 0 and 'Lean default kernel rejects the solution' in output:
@@ -46,3 +55,13 @@ def admission(receipt, names):
     if nanoda.get('status') == 'incomplete' and nanoda.get('reason') in ['out_of_memory', 'timeout', 'disk_limit', 'total_deadline']:
         return 'passed', 'lean_and_axiom_passed_nanoda_incomplete'
     return 'pending_review', 'nanoda_ambiguous'
+
+
+def compile_error_comment(receipt):
+    lean = receipt.get('kernels', {}).get('lean', {})
+    if lean.get('status') != 'rejected' or lean.get('reason') != 'lean_compile_error':
+        return ''
+    # A diagnostic is untrusted text: one bounded quote, no mentions or markup.
+    text = ' '.join(str(lean.get('diagnostic', 'Lean compilation failed')).split())[:500]
+    text = html.escape(text).replace('@', '&#64;').replace('`', '&#96;').replace('[', '&#91;').replace(']', '&#93;')
+    return '\n\nCompile error:\n\n> ' + text

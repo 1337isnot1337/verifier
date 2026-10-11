@@ -96,6 +96,8 @@ class PRTests(unittest.TestCase):
         for kernel in ['lean','nanoda']:
             bad=copy.deepcopy(receipt);bad['kernels'][kernel]['status']='rejected';bad['theorems']['Race.bound'][kernel+'_kernel']='rejected'
             self.assertEqual(p.outcome(bad,req,'failure')[0],'close')
+        bad=copy.deepcopy(receipt);bad['kernels']['lean'].update(status='rejected',reason='lean_compile_error');bad['axiom_audit'].update(status='not_completed_or_rejected',reported_axioms={})
+        self.assertEqual(p.outcome(bad,req,'success')[0],'close')
         bad=copy.deepcopy(receipt);bad['axiom_audit'].update(status='invalid_output',reported_axioms={'Race.bound':['sorryAx']})
         self.assertEqual(p.outcome(bad,req,'failure')[0],'close')
         for conclusion in ['cancelled','timed_out','startup_failure']:

@@ -15,7 +15,7 @@ import zipfile
 from functools import lru_cache
 
 import submissions as s
-from verdicts import AXIOMS
+from verdicts import AXIOMS, compile_error_comment
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = '.github/workflows/submissions.yml'
@@ -463,11 +463,12 @@ def publish_pr(artifact_override=None, stage="final"):
         'receipt_sha256': digest(files['receipt.json']) if 'receipt.json' in files else None,
         'disposition': disposition, 'reason': reason, 'merge_commit': None}
     comment = f"<!-- bos-pr-v2 {number} {request['head_sha']} -->\n" + f'PR proof result: **{disposition}**. {reason}.\n\n[Receipt and logs]({url})'
+    comment += compile_error_comment(receipt or {})
     if request.get('test_only'):
         comment += '\n\nTEST ONLY: this smoke result must never be imported.'
     if disposition == 'close' and receipt and receipt.get('kernels', {}).get('nanoda', {}).get('status') == 'rejected':
         comment += '\n\n@nmamano Nanoda rejected this proof; maintainer review is required.'
-    # No proof output or unchecked issue text is posted.
+    # Only the bounded, escaped compile diagnostic can be posted from proof output.
     if recovering_merge:
         if disposition not in ['merge', 'blocked', 'keep_open'] or not pr.get('merge_commit_sha'):
             raise ValueError('Merged PR cannot be reconstructed as an accepted result')

@@ -11,7 +11,7 @@ import re
 import urllib.request
 import time
 from datetime import datetime, timezone
-from verdicts import admission
+from verdicts import admission, compile_error_comment
 
 ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY = 'bigospeedrun/verifier'
@@ -479,6 +479,7 @@ def report():
     body = marker_for(selected['issue_number'], selected['submission_sha256'], selected['issue_body_sha256']) + '\n'
     body += f"{status} for source commit `{selected['submission']['commit']}`.\n\n"
     body += f"[Receipt and logs]({result['receipt_url']}) · [Workflow run]({run_url})\n\n"
+    body += compile_error_comment(receipt)
     if stale:
         body += 'This result belongs to an older or closed submission. The current issue is not verified by this result.\n\n'
     if result['status'] in ['blocked', 'pending_review']:

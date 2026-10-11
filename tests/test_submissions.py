@@ -14,7 +14,7 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 import submissions as s
 import verifier as v
 import queue_lease
-from verdicts import kernel_outcome
+from verdicts import kernel_outcome, compile_error_comment
 FIXTURE = ROOT / 'tests/fixtures/direct'
 
 
@@ -113,6 +113,20 @@ class SubmissionTests(unittest.TestCase):
         self.assertEqual(kernel_outcome('nanoda',1,'','oom-kill'),{'status':'incomplete','reason':'out_of_memory'})
         self.assertEqual(kernel_outcome('nanoda',1,'Nanoda kernel rejected the solution')['status'],'pending_review')
         self.assertEqual(kernel_outcome('nanoda',1,'Nanoda kernel rejected the solution\nassertion failed: self.def_eq(u, v)')['status'],'rejected')
+
+    def test_compile_error_rejected_but_resources_remain_incomplete(self):
+        log='error: Submission.lean:15:2: Type mismatch: After simplification\nerror: build failed'
+        outcome=kernel_outcome('lean',1,log,'exit-code')
+        self.assertEqual(outcome['reason'],'lean_compile_error')
+        self.assertEqual(outcome['status'],'rejected')
+        self.assertEqual(kernel_outcome('lean',1,log,'oom-kill')['status'],'incomplete')
+        self.assertEqual(kernel_outcome('lean',1,'error: build failed','exit-code')['status'],'pending_review')
+        self.assertEqual(kernel_outcome('lean',0,log)['status'],'pending_review')
+        outcome['diagnostic']='error @nmamano <b> `[link]`\nnext'
+        comment=compile_error_comment({'kernels':{'lean':outcome}})
+        self.assertNotIn('@nmamano',comment)
+        self.assertNotIn('<b>',comment)
+        self.assertIn('Compile error:',comment)
 
     def test_bound_gate(self):
         for problem,current,better,worse in [('dft','1/1000','1/999','1/1001'),('3sum','2499/1250','1999/1000','2'),('apsp','149971/50000','2999/1000','3')]:
