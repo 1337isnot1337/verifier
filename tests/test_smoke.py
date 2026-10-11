@@ -19,6 +19,15 @@ class SmokeTests(unittest.TestCase):
             self.assertFalse(smoke.active(dict(selected,**{field:value})))
         with self.assertRaises(ValueError):smoke.issue_submission(dict(sub,commit='a'*40))
 
+    def test_report_normalizes_only_authenticated_fixed_smoke(self):
+        sub=s.validate_submission({'schema_version':1,'problem':'dft','repo_url':smoke.REPO,'commit':smoke.PIN,'bound':smoke.BOUND,'authors':[]})
+        selected={'test_only':True,'live_smoke':smoke.TAG,'submission':smoke.issue_submission(sub)}
+        with patch.object(s,'issue_input',return_value=sub):
+            self.assertEqual(s.report_submission({},selected),selected['submission'])
+            self.assertEqual(s.report_submission({},dict(selected,test_only=False)),sub)
+        with patch.object(s,'issue_input',return_value=dict(sub,commit='a'*40)):
+            with self.assertRaises(ValueError):s.report_submission({},selected)
+
     def test_pr_smoke_has_fixed_problem_bound_and_test_folder(self):
         selected={'test_only':True,'live_smoke':smoke.TAG,'route':'pull_request',
                   'submission':{'problem':'dft','bound':smoke.BOUND},'source_subdir':'submissions/dft/nmamano-smoke-dft-837dc31'}

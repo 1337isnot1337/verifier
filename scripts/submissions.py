@@ -442,6 +442,14 @@ def receipt_artifact():
             'archive_url': f'https://github.com/{REPOSITORY}/actions/runs/{run_id}/artifacts/{artifact["id"]}'}
 
 
+def report_submission(current, selected):
+    sub = issue_input(current)
+    import smoke
+    if smoke.active(selected):
+        sub = smoke.issue_submission(sub)
+    return sub
+
+
 def report():
     selected = json.loads(Path('request/request.json').read_text())
     receipt_file = Path('result/receipt.json')
@@ -461,11 +469,13 @@ def report():
     Path('published/direct-submission.json').write_text(canonical(result) + '\n')
     current = api(f"issues/{selected['issue_number']}")
     try:
-        current_submission = issue_input(current)
+        current_submission = report_submission(current, selected)
     except ValueError:
         current_submission = None
     stale = current_submission != selected['submission'] or body_hash(current.get('body') or '') != selected['issue_body_sha256']
-    status = {'passed': 'Lean Verified', 'blocked': 'Blocked for maintainer review', 'pending_review': 'Pending review'}.get(result['status'], 'Not verified')
+    status = {'passed': 'Lean Verified', 'blocked': 'Blocked for maintainer review', 'pending_review': 'Pending review'}.get(result['verification_status'], 'Not verified')
+    if result['test_only']:
+        status = 'TEST ONLY: ' + ('proof checks passed' if result['verification_status'] == 'passed' else status)
     body = marker_for(selected['issue_number'], selected['submission_sha256'], selected['issue_body_sha256']) + '\n'
     body += f"{status} for source commit `{selected['submission']['commit']}`.\n\n"
     body += f"[Receipt and logs]({result['receipt_url']}) · [Workflow run]({run_url})\n\n"

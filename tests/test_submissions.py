@@ -210,6 +210,7 @@ class SubmissionTests(unittest.TestCase):
                 result=json.loads(Path('published/direct-submission.json').read_text())
                 self.assertEqual(result['status'],'fixture_only');self.assertEqual(result['verification_status'],'passed');self.assertFalse(result['importable'])
                 self.assertIn('older or closed',calls[0]['body'])
+                self.assertIn('TEST ONLY: proof checks passed',calls[0]['body'])
             finally:os.chdir(old)
 
     def test_module_headers_and_manifest(self):
