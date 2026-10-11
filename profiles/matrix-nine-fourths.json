@@ -1,0 +1,38 @@
+{
+  "lean_toolchain": "leanprover/lean4:v4.34.1",
+  "challenge_file": "challenges/matrix-multiplication/MatrixMultiplication.lean",
+  "challenge_sha256": "9a411f75929179604218e1cf84de34792e05acf40b15096ad4178ba21defa8eb",
+  "solution_module": "OAI.LinearAlgebra.MatrixMultiplication.Main",
+  "theorem_names": [
+    "OAI.MatrixMultiplication.complex_omega_le_nine_quarters"
+  ],
+  "source_roots": [
+    "OAI"
+  ],
+  "source_subdir": "lean",
+  "source_prefixes": [
+    "OAI/LinearAlgebra/MatrixMultiplication"
+  ],
+  "sparse_paths": [
+    "/lean/OAI/LinearAlgebra/MatrixMultiplication/"
+  ],
+  "permitted_axioms": [
+    "propext",
+    "Quot.sound",
+    "Classical.choice"
+  ],
+  "bound": "9/4",
+  "score_relation": "attained",
+  "model": "matrix-multiplication/arithmetic-circuit-complex",
+  "upstream_commit": "fd4aeeb2ee4fc729c18d98444fed42fd0529eeeb",
+  "solution_dependencies": [
+    {
+      "repo_url": "https://github.com/harfe/fixed-point-theorems-lean4",
+      "commit": "770940ddf9878cf61952ed53d910b92bca841838",
+      "source_roots": [
+        "FixedPointTheorems"
+      ],
+      "license": "MIT"
+    }
+  ]
+}

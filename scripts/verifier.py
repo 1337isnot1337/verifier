@@ -90,7 +90,7 @@ def validate_request(request):
     return profile, names
 
 
-def clone(url, sha, dest, label):
+def clone(url, sha, dest, label, sparse_paths=None):
     dest.mkdir(parents=True)
     # No submodules, hooks, credential helper, or submission build commands.
     command(['git', 'init', dest], label + '-init')
@@ -98,6 +98,8 @@ def clone(url, sha, dest, label):
               '-c', 'credential.helper=', '-c', 'protocol.file.allow=never',
               '-c', 'filter.lfs.required=false', '-c', 'filter.lfs.smudge=', '-c', 'filter.lfs.process=']
     command(common + ['fetch', '--depth=1', url, sha], label + '-fetch')
+    if sparse_paths:
+        command(common + ['sparse-checkout', 'set', '--no-cone', *sparse_paths], label + '-sparse')
     command(common + ['checkout', '--detach', 'FETCH_HEAD'], label + '-checkout')
     actual = subprocess.check_output(['git', '-C', dest, 'rev-parse', 'HEAD'], text=True).strip()
     if actual != sha:
@@ -208,34 +210,49 @@ def prepare():
     write_json(WORK / 'control/request.json', {'request': request, 'profile': profile, 'names': names})
     data.update(request=request, profile=profile, theorem_names=names)
     save(data)
-    clone(request['repo_url'], request['commit'], WORK / 'clone', 'submission')
+    clone_options = {'sparse_paths': profile['sparse_paths']} if profile.get('sparse_paths') else {}
+    clone(request['repo_url'], request['commit'], WORK / 'clone', 'submission', **clone_options)
+    sources = [(WORK / 'clone', request.get('source_subdir', profile.get('source_subdir', '')),
+                profile['source_roots'], profile.get('source_prefixes', []))]
+    dependencies = profile.get('solution_dependencies', [])
+    for index, dep in enumerate(dependencies):
+        location = WORK / f'solution-dependency-{index}'
+        clone(dep['repo_url'], dep['commit'], location, f'solution-dependency-{index}')
+        sources.append((location, dep.get('source_subdir', ''), dep['source_roots'], []))
+    data = receipt(); data['solution_dependencies'] = dependencies; save(data)
     stage = WORK / 'stage'; stage.mkdir()
-    tracked = subprocess.check_output(['git', '-C', WORK / 'clone', 'ls-tree', '-rz', 'HEAD'])
     hashes, total = {}, 0
-    for entry in tracked.split(b'\0'):
-        if not entry:
-            continue
-        meta, rawpath = entry.split(b'\t', 1); mode = meta.split()[0]
-        source_rel = Path(rawpath.decode('utf-8'))
-        rel = source_rel
-        if request.get('source_subdir'):
-            try:
-                rel = source_rel.relative_to(request['source_subdir'])
-            except ValueError:
+    for location, subdir, roots, prefixes in sources:
+        tracked = subprocess.check_output(['git', '-C', location, 'ls-tree', '-rz', 'HEAD'])
+        for entry in tracked.split(b'\0'):
+            if not entry:
                 continue
-        if not rel.parts or rel.parts[0].removesuffix('.lean') not in profile['source_roots'] or rel.suffix != '.lean':
-            continue
-        module = '.'.join(rel.with_suffix('').parts)
-        if mode != b'100644' or not NAME.fullmatch(module):
-            raise ValueError('only regular Lean source files with ordinary module names are admitted')
-        source = WORK / 'clone' / source_rel
-        if source.stat().st_size > 20_000_000:
-            raise ValueError('individual Lean source exceeds 20 MB')
-        total += source.stat().st_size
-        if total > 150_000_000:
-            raise ValueError('Lean source input exceeds 150 MB')
-        target = stage / rel; target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, target); hashes[str(rel)] = digest(target)
+            meta, rawpath = entry.split(b'\t', 1); mode = meta.split()[0]
+            source_rel = Path(rawpath.decode('utf-8'))
+            rel = source_rel
+            if subdir:
+                try:
+                    rel = source_rel.relative_to(subdir)
+                except ValueError:
+                    continue
+            if not rel.parts or rel.parts[0].removesuffix('.lean') not in roots or rel.suffix != '.lean':
+                continue
+            if prefixes and not any(rel.is_relative_to(prefix) for prefix in prefixes):
+                continue
+            module = '.'.join(rel.with_suffix('').parts)
+            if mode != b'100644' or not NAME.fullmatch(module):
+                raise ValueError('only regular Lean source files with ordinary module names are admitted')
+            source = location / source_rel
+            if source.stat().st_size > 20_000_000:
+                raise ValueError('individual Lean source exceeds 20 MB')
+            total += source.stat().st_size
+            if total > 150_000_000:
+                raise ValueError('Lean source input exceeds 150 MB')
+            target = stage / rel
+            if target.exists():
+                raise ValueError('solution dependency collides with a staged source module')
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target); hashes[str(rel)] = digest(target)
     write_json(ART / 'source-sha256.json', hashes)
     chains = plan_sources(stage, profile['solution_module'])
     write_json(WORK / 'control/chains.json', chains)
@@ -248,7 +265,7 @@ def prepare():
     data = receipt(); data['generated_challenge_sha256'] = digest(stage / 'VerifierChallenge.lean'); save(data)
     (stage / 'VerifierAudit.lean').write_text('import ' + profile['solution_module'] + '\n' +
                                            ''.join('#print axioms ' + n + '\n' for n in names))
-    (stage / 'lakefile.toml').write_text(lakefile(profile['source_roots'] + ['VerifierChallenge', 'VerifierAudit'], profile.get('manifest_file', 'profiles/lake-manifest.json')))
+    (stage / 'lakefile.toml').write_text(lakefile(profile['source_roots'] + [root for dep in dependencies for root in dep['source_roots']] + ['VerifierChallenge', 'VerifierAudit'], profile.get('manifest_file', 'profiles/lake-manifest.json')))
     (stage / 'lean-toolchain').write_text(request['lean_toolchain'] + '\n')
     shutil.copyfile(ROOT / profile.get('manifest_file', 'profiles/lake-manifest.json'), stage / 'lake-manifest.json')
     (stage / '.lake/build').mkdir(parents=True); (stage / '.lake/packages').mkdir()
