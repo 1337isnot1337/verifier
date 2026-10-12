@@ -9,6 +9,8 @@ import os
 from pathlib import Path
 import re
 import urllib.request
+import urllib.error
+from http.client import IncompleteRead
 import time
 from datetime import datetime, timezone
 from verdicts import admission, compile_error_comment
@@ -153,15 +155,31 @@ def scan_timeout():
     return 15 if SCAN_BUDGET is not None else 60
 
 
+def github_read_retry(req, open_request, read_response, path):
+    """Retry GET transport failures only; never replay a possibly committed write."""
+    for attempt in range(3):
+        scan_check(path)
+        try:
+            with open_request(req, timeout=scan_timeout()) as response:
+                return read_response(response)
+        except urllib.error.HTTPError as exc:
+            retryable = 500 <= exc.code < 600
+            exc.close()
+            if not retryable or req.get_method() != 'GET' or attempt == 2:
+                raise
+        except (urllib.error.URLError, ConnectionError, TimeoutError, IncompleteRead):
+            if req.get_method() != 'GET' or attempt == 2:
+                raise
+        time.sleep(2 ** attempt)
+
+
 def api(path, data=None, method=None):
-    scan_check(path)
     # This constant origin is the only destination for this scoped token.
     req = urllib.request.Request('https://api.github.com/repos/' + REPOSITORY + '/' + path,
           data=None if data is None else json.dumps(data).encode(), method=method,
           headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json',
                    'X-GitHub-Api-Version': '2022-11-28', 'Content-Type': 'application/json'})
-    with urllib.request.urlopen(req, timeout=scan_timeout()) as response:
-        return json.load(response)
+    return github_read_retry(req, urllib.request.urlopen, json.load, path)
 
 
 def pages(path):
@@ -204,12 +222,10 @@ def issue_request(issue, submission):
 def site_snapshot(problem):
     import base64
     def read(path):
-        scan_check(path)
         req = urllib.request.Request('https://api.github.com/repos/bigospeedrun/site/' + path,
                                      headers={'Accept': 'application/vnd.github+json',
                                               'Authorization': 'Bearer ' + os.environ['GH_TOKEN']})
-        with urllib.request.urlopen(req, timeout=scan_timeout()) as response:
-            return json.load(response)
+        return github_read_retry(req, urllib.request.urlopen, json.load, path)
     sha = read('commits/main')['sha']
     if not re.fullmatch('[0-9a-f]{40}', sha):
         raise ValueError('Invalid site commit')

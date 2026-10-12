@@ -34,7 +34,6 @@ class SupersededHead(ValueError):
 
 
 def api(path, data=None, method=None, raw=False):
-    s.scan_check(path)
     req = urllib.request.Request('https://api.github.com/repos/' + s.REPOSITORY + '/' + path,
         data=None if data is None else json.dumps(data).encode(), method=method,
         headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
@@ -47,8 +46,7 @@ def api(path, data=None, method=None, raw=False):
                 redirected.remove_header('Authorization')
             return redirected
     opener = urllib.request.build_opener(PublicRedirect)
-    with opener.open(req, timeout=s.scan_timeout()) as response:
-        return bounded_read(response) if raw else json.load(response)
+    return s.github_read_retry(req, opener.open, bounded_read if raw else json.load, path)
 
 
 def bounded_read(response):
