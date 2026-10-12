@@ -471,8 +471,19 @@ def publish_pr(artifact_override=None, stage="final"):
         if disposition not in ['merge', 'blocked', 'keep_open'] or not pr.get('merge_commit_sha'):
             raise ValueError('Merged PR cannot be reconstructed as an accepted result')
         envelope['merge_commit'] = pr['merge_commit_sha']
+        if stage == 'final':
+            marker = f"<!-- bos-pr-final-v2 {number} {request['head_sha']} {run_id} {attempt} -->"
+            final = marker + '\nFinal verification result.\n' + comment
+            states = {'passed', 'rejected', 'incomplete', 'pending', 'pending_review', 'not_started'}
+            for kernel in ['lean', 'nanoda']:
+                status = (receipt or {}).get('kernels', {}).get(kernel, {}).get('status')
+                final += f"\n{kernel}: {status if status in states else 'unknown'}."
+            audit = (receipt or {}).get('axiom_audit', {}).get('status')
+            final += f"\nAxiom audit: {audit if audit in states else 'unknown'}."
+            if disposition in ['blocked', 'keep_open']:
+                final += '\n\n@nmamano The advisory result blocks or suspends this merged proof; the site must replace its earlier passing status.'
+            publish_final_comment(number, marker, final)
         if disposition in ['blocked', 'keep_open']:
-            api(f'issues/{number}/comments', {'body': comment + '\n\n@nmamano The advisory result blocks or suspends this merged proof; the site must replace its earlier passing status.'})
             label_review(number)
     else:
         api(f'issues/{number}/comments', {'body': comment})
@@ -501,6 +512,21 @@ def publish_pr(artifact_override=None, stage="final"):
         label_review(number)
     Path('published').mkdir(exist_ok=True)
     Path(f'published/pr-submission-{number}{suffix}.json').write_text(s.canonical(envelope) + '\n')
+
+
+def publish_final_comment(number, marker, body):
+    """Keep one final comment for this source run/attempt on publisher reruns."""
+    for page in range(1, 11):
+        comments = api(f'issues/{number}/comments?per_page=100&page={page}')
+        for comment in comments:
+            if s.is_bot(comment) and comment.get('body', '').startswith(marker):
+                if comment['body'] != body:
+                    api(f"issues/comments/{comment['id']}", {'body': body}, method='PATCH')
+                return
+        if len(comments) < 100:
+            api(f'issues/{number}/comments', {'body': body})
+            return
+    raise ValueError('Final comment lookup exceeds bounded scan; review required')
 
 
 def label_review(number):

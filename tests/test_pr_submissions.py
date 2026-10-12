@@ -167,6 +167,7 @@ class PRTests(unittest.TestCase):
                     pr['head']['sha']='e'*40
                 return pr
             if path=='actions/workflows/submissions.yml':return {'id':55}
+            if path.startswith('issues/7/comments?'):return []
             raise AssertionError(path)
         with tempfile.TemporaryDirectory() as tmp:
             old=Path.cwd();os.chdir(tmp)
@@ -210,7 +211,13 @@ class PRTests(unittest.TestCase):
         result,calls=self.publish_fixture(mutate_pr=lambda pr:pr.update(state='closed',merged=True,merge_commit_sha='d'*40))
         self.assertTrue(result['importable'])
         self.assertEqual(result['merge_commit'],'d'*40)
-        self.assertEqual(calls,[])
+        comments=[c for c in calls if c[0]=='issues/7/comments']
+        self.assertEqual(len(comments),1)
+        self.assertIn('Final verification result',comments[0][1]['body'])
+        self.assertIn('nanoda: passed',comments[0][1]['body'])
+        self.assertIn('Axiom audit: passed',comments[0][1]['body'])
+        self.assertNotIn('nanoda_pending',comments[0][1]['body'])
+        self.assertFalse(any(c[0].endswith('/merge') for c in calls))
 
     def test_changed_head_stays_open_for_new_check(self):
         # Even an incompatible new manifest/diff belongs to the newer run.
@@ -270,3 +277,27 @@ class PRTests(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+
+class FinalCommentTests(unittest.TestCase):
+    def test_repeated_publication_reuses_final_comment(self):
+        marker='<!-- bos-pr-final-v2 7 head 123 1 -->'
+        body=marker+'\nFinal verification result.'
+        existing={'id':9,'body':body,'user':{'login':'github-actions[bot]','type':'Bot'}}
+        with patch.object(p,'api',return_value=[existing]) as api:
+            p.publish_final_comment(7,marker,body)
+            self.assertEqual(api.call_count,1)
+        with patch.object(p,'api',side_effect=[[existing],{}]) as api:
+            p.publish_final_comment(7,marker,body+' updated')
+            self.assertEqual(api.call_args.args[0],'issues/comments/9')
+            self.assertEqual(api.call_args.kwargs['method'],'PATCH')
+
+    def test_final_comment_after_page_one_and_untrusted_marker(self):
+        marker='<!-- bos-pr-final-v2 7 head 123 1 -->';body=marker+'\nFinal'
+        user={'id':8,'body':body,'user':{'login':'submitter','type':'User'}}
+        bot={'id':9,'body':body,'user':{'login':'github-actions[bot]','type':'Bot'}}
+        with patch.object(p,'api',side_effect=[[user]*100,[bot]]) as api:
+            p.publish_final_comment(7,marker,body)
+            self.assertEqual(api.call_count,2)
+        with patch.object(p,'api',side_effect=[[user],{}]) as api:
+            p.publish_final_comment(7,marker,body)
+            self.assertEqual(api.call_args.args,('issues/7/comments',{'body':body}))
