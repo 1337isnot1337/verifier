@@ -90,6 +90,39 @@ class PRTests(unittest.TestCase):
                 self.assertIn('theorem Race.bound',(root/'work/stage/Submission.lean').read_text())
                 self.assertEqual(v.receipt()['source_file_count'],1)
 
+    def select_with_files(self, paths, statuses=None, changed_files=None):
+        class Lease:
+            def admitted(self, key): return False
+        files=[{'filename':path,'status':'added'} for path in paths]
+        for file,previous in zip(files,statuses or []):
+            if previous:file.update(status='renamed',previous_filename=previous)
+        pr=copy.deepcopy(self.pr);pr['changed_files']=len(files) if changed_files is None else changed_files
+        def api(path,*args,**kwargs):
+            if path=='pulls/7':return pr
+            if path.startswith('pulls/7/files'):
+                page=int(path.rsplit('page=',1)[1])
+                return files[100*(page-1):100*page]
+            raise AssertionError(path)
+        with patch.object(p,'api',side_effect=api),patch.dict(os.environ,{'GITHUB_SHA':'b'*40}):
+            return p.select_candidate({'number':7},Lease())
+
+    def test_research_and_statement_prs_are_not_proof_candidates(self):
+        for paths in [['auto-research/audits/2026-10-14-alice-x/README.md','auto-research/audits/2026-10-14-alice-x/RESULT.json'],
+                      ['challenges/subset-sum/Statement.lean','challenges/subset-sum/README.md'],
+                      ['auto-research.md']]:
+            with self.subTest(paths=paths):self.assertIsNone(self.select_with_files(paths))
+
+    def test_mixed_rename_and_oversized_prs_stay_validated(self):
+        cases=[(['auto-research/audits/x/README.md',self.folder+'/Submission.lean'],None,None),
+               (['auto-research/audits/x/Submission.lean'],[self.folder+'/Submission.lean'],None),
+               (['auto-research/audits/x/README.md'],None,2),
+               (['auto-research/audits/x/f%d.md'%i for i in range(501)],None,None)]
+        for paths,previous,changed in cases:
+            with self.subTest(paths=paths[:2]):
+                selected=self.select_with_files(paths,previous,changed)
+                self.assertEqual(selected['gate'],'invalid_layout')
+                self.assertEqual(p.outcome(None,selected,'success')[0],'close')
+
     def test_auto_outcomes(self):
         req=self.request();receipt=self.receipt()
         self.assertEqual(p.outcome(receipt,req,'success')[0],'merge')
@@ -301,3 +334,4 @@ class FinalCommentTests(unittest.TestCase):
         with patch.object(p,'api',side_effect=[[user],{}]) as api:
             p.publish_final_comment(7,marker,body)
             self.assertEqual(api.call_args.args,('issues/7/comments',{'body':body}))
+

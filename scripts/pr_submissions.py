@@ -243,10 +243,24 @@ def validate_controller(head, base):
                 raise LayoutError('PR workflow/controller differs from the trusted publisher revision')
 
 
+def proof_candidate(pr):
+    """Statement and auto-research PRs touch no submissions/ path; maintainers review them."""
+    try:
+        changed = files_changed(pr['number'])
+    except LayoutError:
+        return True
+    if not changed or len(changed) != pr['changed_files']:
+        return True
+    return any(path.startswith('submissions/') for f in changed
+               for path in [f['filename'], f.get('previous_filename') or ''])
+
+
 def select_candidate(issue, lease):
     import queue_lease
     pr = api(f"pulls/{issue['number']}")
     if lease.admitted(queue_lease.admission_key({'route': 'pull_request', 'pr_number': pr['number'], 'head_sha': pr['head']['sha']})):
+        return None
+    if not proof_candidate(pr):
         return None
     selected = {'schema_version': 2, 'route': 'pull_request', 'pr_number': pr['number'],
         'head_sha': pr['head']['sha'], 'base_sha': pr['base']['sha'],
