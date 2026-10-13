@@ -71,3 +71,6 @@ See [issue security and layout](docs/direct-submissions.md),
 
 To propose a trusted statement for a problem that has none, see
 [the statement contribution guide](docs/new-statements.md).
+
+For research that is not a proof submission (statements, formalization,
+audits, tooling and negative results), see [auto-research.md](auto-research.md).
