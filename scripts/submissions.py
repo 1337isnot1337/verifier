@@ -503,14 +503,35 @@ def report():
     if gate_path.exists() and json.loads(gate_path.read_text())['status'] == 'claimed_only':
         body += 'The issue or current record changed before compilation. This submission remains Claimed; no proof run started.\n\n'
     body += 'A pass checks the stated bound in the fixed model. It does not establish novelty, priority, authorship, or practical speed.'
+    # Nil rule 2026-10-17: no issue stays open indefinitely. Close after the final result
+    # comment: completed on a verified pass, not planned on a genuine rejection. Stale and
+    # claimed-only results are not final, and ambiguous or resource outcomes stay open for review.
+    kernels = receipt.get('kernels', {})
+    rejected = any(kernels.get(kernel, {}).get('status') == 'rejected' for kernel in ['lean', 'nanoda'])
+    close = None
+    # A test_only (smoke) run never closes its issue: the hosted smoke identities must stay open.
+    if not stale and not result['test_only'] and not (gate_path.exists() and json.loads(gate_path.read_text())['status'] == 'claimed_only'):
+        if result['status'] == 'passed':
+            close = 'completed'
+            body += '\n\nTo submit a stronger bound, open a new issue. This issue now closes.'
+        elif result['status'] == 'blocked' or rejected:
+            close = 'not_planned'
+            body += '\n\nTo submit a corrected proof, open a new issue. This issue now closes.'
     # Content is generated solely from bounded fields. Never post proof logs.
-    Path('published-comment.json').write_text(canonical({'issue_number': selected['issue_number'], 'body': body}) + '\n')
+    payload = {'issue_number': selected['issue_number'], 'body': body}
+    if close:
+        payload['close'] = close
+    Path('published-comment.json').write_text(canonical(payload) + '\n')
 
 
 def publish():
     # Called only after the immutable result artifact has uploaded successfully.
     comment = json.loads(Path('published-comment.json').read_text())
     api(f"issues/{comment['issue_number']}/comments", {'body': comment['body']})
+    # A final result closes the issue: completed on a pass, not planned on a rejection.
+    # Only the report comment carries a close decision; earlier comments never close.
+    if comment.get('close'):
+        api(f"issues/{comment['issue_number']}", {'state': 'closed', 'state_reason': comment['close']}, method='PATCH')
 
 
 if __name__ == '__main__':

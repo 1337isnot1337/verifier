@@ -231,6 +231,59 @@ class SubmissionTests(unittest.TestCase):
                 self.assertIn('TEST ONLY: proof checks passed',calls[0]['body'])
             finally:os.chdir(old)
 
+    def live(self):
+        return s.issue_request(issue(), s.issue_input(issue()))
+
+    def status_report(self, receipt, gate=None, test_only=False):
+        selection=self.live();selection['test_only']=test_only;receipt['request']=selection['inputs'];artifact={'id':99,'name':'fixture','digest':'sha256:'+'f'*64,'archive_url':'https://github.com/bigospeedrun/verifier/actions/runs/123/artifacts/99'}
+        with tempfile.TemporaryDirectory() as tmp:
+            old=Path.cwd();os.chdir(tmp)
+            try:
+                Path('request').mkdir();Path('result').mkdir();Path('published').mkdir()
+                Path('request/request.json').write_text(json.dumps(selection));Path('result/receipt.json').write_text(json.dumps(receipt))
+                if gate:Path('result/gate.json').write_text(json.dumps(gate))
+                calls=[]
+                def fake_api(path,data=None,method=None):
+                    if data is None:return issue()
+                    calls.append((method,path,data))
+                with patch.object(s,'api',side_effect=fake_api),patch.object(s,'receipt_artifact',return_value=artifact),patch.dict(os.environ,GITHUB_RUN_ID='123',GITHUB_RUN_ATTEMPT='1',GITHUB_SHA='a'*40):
+                    s.report();s.publish()
+                return json.loads(Path('published-comment.json').read_text()),calls
+            finally:os.chdir(old)
+
+    def test_final_pass_closes_the_issue_as_completed(self):
+        comment,calls=self.status_report(self.receipt())
+        self.assertEqual(comment['close'],'completed')
+        self.assertIn('To submit a stronger bound, open a new issue. This issue now closes.',comment['body'])
+        self.assertEqual(calls[0][1],'issues/42/comments');self.assertEqual(calls[0][2],{'body':comment['body']})
+        self.assertEqual(calls[1],('PATCH','issues/42',{'state':'closed','state_reason':'completed'}))
+
+    def test_genuine_rejection_closes_the_issue_as_not_planned(self):
+        receipt=self.receipt();receipt['kernels']['lean']['status']='rejected';receipt['axiom_audit']={'status':'incomplete'}
+        comment,calls=self.status_report(receipt)
+        self.assertEqual(comment['close'],'not_planned')
+        self.assertIn('To submit a corrected proof, open a new issue. This issue now closes.',comment['body'])
+        self.assertEqual(calls[1],('PATCH','issues/42',{'state':'closed','state_reason':'not_planned'}))
+
+    def test_ambiguous_result_stays_open(self):
+        receipt=self.receipt();receipt['kernels']['lean']['status']='incomplete'
+        comment,calls=self.status_report(receipt)
+        self.assertNotIn('close',comment)
+        self.assertEqual(len(calls),1)
+
+    def test_test_only_result_never_closes(self):
+        rejected=self.receipt();rejected['kernels']['lean']['status']='rejected'
+        for receipt in [self.receipt(),rejected]:
+            comment,calls=self.status_report(receipt,test_only=True)
+            self.assertNotIn('close',comment)
+            self.assertEqual(len(calls),1)
+
+    def test_claimed_only_result_stays_open(self):
+        comment,calls=self.status_report(self.receipt(),gate={'status':'claimed_only','reason':'record_or_issue_changed','record_gate':{'score':'1/2000','score_relation':'attained'}})
+        self.assertNotIn('close',comment)
+        self.assertIn('no proof run started',comment['body'])
+        self.assertEqual(len(calls),1)
+
     def test_module_headers_and_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
             stage=Path(tmp);(stage/'Submission').mkdir();(stage/'Submission/A.lean').write_text('module\npublic import Mathlib\n');(stage/'Submission.lean').write_text('module\npublic import Submission.A\n')
