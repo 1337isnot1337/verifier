@@ -235,6 +235,12 @@ def site_snapshot(problem):
     return sha, raw
 
 
+def open_rank(problem):
+    """Second key of an open endpoint: below an attained score on dft (max wins), above it
+    on the exponent boards (min wins), so an attained tie always leads."""
+    return -1 if problem == 'dft' else 1
+
+
 def current_record(problem, issue_url):
     """Read the board from a resolved immutable site commit, never the issue repo."""
     sha, raw = site_snapshot(problem)
@@ -246,9 +252,9 @@ def current_record(problem, issue_url):
                and not data['record_metadata'].get(r['id'], {}).get('reproduction_of')]
     if not records:
         raise ValueError('No current record; refuse to guess')
-    # Mirrors the site comparison: exact score first, attained above a strict
-    # frontier at equal saving. Lower-exponent frontiers sort before attained.
-    key = lambda r: (Fraction(r['score']), -1 if r.get('score_relation') == 'strict-upper-bound' else 0)
+    # Mirrors the site comparison (site data/direct_import.py open_rank): exact score
+    # first, and an open endpoint is weaker than an attained value at the same score.
+    key = lambda r: (Fraction(r['score']), open_rank(problem) if r.get('score_relation') == 'strict-upper-bound' else 0)
     best = (max if problem == 'dft' else min)(records, key=key)
     leaders = [r for r in records if key(r) == key(best)]
     def lean_verified(row):
@@ -266,7 +272,7 @@ def current_record(problem, issue_url):
 
 def qualifies_for_run(submission, record):
     candidate = (Fraction(submission['bound']), 0)
-    current = (Fraction(record['score']), -1 if record['score_relation'] == 'strict-upper-bound' else 0)
+    current = (Fraction(record['score']), open_rank(submission['problem']) if record['score_relation'] == 'strict-upper-bound' else 0)
     if candidate == current:
         # A tie can upgrade Claimed evidence. Missing evidence metadata cannot
         # authorize a costly run. Never relabel another author's record.

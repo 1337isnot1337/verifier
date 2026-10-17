@@ -141,6 +141,17 @@ class SubmissionTests(unittest.TestCase):
             self.assertFalse(s.qualifies_for_run(s.parse_body(body(problem,worse)),record))
         self.assertTrue(s.qualifies_for_run(s.parse_body(body()),{'score':'1/1000','score_relation':'strict-upper-bound'}))
 
+    def test_open_endpoint_is_weaker_than_an_attained_tie(self):
+        # Worker 2, 2026-10-17: on exponent boards min() picked the endpoint over an attained tie.
+        for problem,score in [('dft','1/1000'),('3sum','1999/1000'),('apsp','2999/1000')]:
+            data={'problem_id':s.MODEL_IDS[problem],'records':[{'id':'open','score':score,'score_relation':'strict-upper-bound'},{'id':'closed','score':score}],
+                  'record_metadata':{'open':{},'closed':{}}}
+            with patch.object(s,'site_snapshot',return_value=('a'*40,json.dumps(data).encode())):
+                record=s.current_record(problem,'https://github.com/bigospeedrun/verifier/issues/42')
+            self.assertEqual((record['leader_ids'],record['score_relation']),(['closed'],'attained'),problem)
+            # An attained submission at an open endpoint's score improves on it.
+            self.assertTrue(s.qualifies_for_run(s.parse_body(body(problem,score)),{'score':score,'score_relation':'strict-upper-bound','any_lean_verified_at_bound':True}),problem)
+
     def test_record_snapshot_matches_board_admission(self):
         data = {'problem_id': '3sum/word-ram', 'records': [
             {'id': 'record', 'score': '1999/1000', 'submission_url': 'https://example.org/record'},
