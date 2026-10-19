@@ -1,5 +1,7 @@
 name: Check Catalan statement on contributor fork
 on:
+  push:
+    branches: [ci/catalan-statement]
   workflow_dispatch:
 permissions:
   contents: read
