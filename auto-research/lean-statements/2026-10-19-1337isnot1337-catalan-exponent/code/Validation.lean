@@ -46,7 +46,8 @@ theorem zero_has_upperBound_one : UpperBoundFor 0 1 := by
   intro s hs
   filter_upwards [eventually_ge_atTop 2] with b hb
   intro a hne
-  have hbR : 1 < (b : ℝ) := by exact_mod_cast hb
+  have hbR2 : (2 : ℝ) ≤ b := by exact_mod_cast hb
+  have hbR : 1 < (b : ℝ) := by linarith
   have hbpos : 0 < (b : ℝ) := lt_trans zero_lt_one hbR
   have ha : a ≠ 0 := by
     intro ha
@@ -69,7 +70,8 @@ theorem no_upperBound_zero (x : ℝ) : ¬ UpperBoundFor x 0 := by
   let b : ℕ := max B 1
   have hbB : B ≤ b := le_max_left _ _
   have hb1 : 1 ≤ b := le_max_right _ _
-  have hbpos : (0 : ℝ) < b := by exact_mod_cast hb1
+  have hbposN : 0 < b := lt_of_lt_of_le Nat.zero_lt_one hb1
+  have hbpos : (0 : ℝ) < b := by exact_mod_cast hbposN
   let a : ℤ := ⌊(b : ℝ) * x⌋ + 1
   have hlo : (b : ℝ) * x < (a : ℝ) := by
     simpa only [a, Int.cast_add, Int.cast_one] using Int.lt_floor_add_one ((b : ℝ) * x)
@@ -83,7 +85,10 @@ theorem no_upperBound_zero (x : ℝ) : ¬ UpperBoundFor x 0 := by
     rw [abs_of_neg (sub_neg.mpr hxa), neg_sub, ← one_div]
     apply (sub_le_iff_le_add).mpr
     apply (div_le_iff₀ hbpos).mpr
-    nlinarith [hhi]
+    calc
+      (a : ℝ) ≤ (b : ℝ) * x + 1 := hhi
+      _ = (1 / (b : ℝ) + x) * (b : ℝ) := by
+        field_simp
   have hbad := hB b hbB a (ne_of_lt hxa)
   simp only [Real.rpow_neg_one] at hbad
   exact (not_lt_of_ge herr) hbad
