@@ -89,6 +89,7 @@ theorem no_upperBound_zero (x : ℝ) : ¬ UpperBoundFor x 0 := by
       (a : ℝ) ≤ (b : ℝ) * x + 1 := hhi
       _ = (1 / (b : ℝ) + x) * (b : ℝ) := by
         field_simp
+        ring
   have hbad := hB b hbB a (ne_of_lt hxa)
   simp only [Real.rpow_neg_one] at hbad
   exact (not_lt_of_ge herr) hbad
