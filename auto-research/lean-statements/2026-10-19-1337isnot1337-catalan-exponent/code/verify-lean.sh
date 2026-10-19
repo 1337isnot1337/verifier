@@ -32,8 +32,8 @@ TOML
 
 cd "$check_dir"
 lake update
-lake exe cache get Mathlib/Analysis/SpecialFunctions/Pow/Real.lean \
-  Mathlib/Topology/Algebra/InfiniteSum/Real.lean \
-  Mathlib/Order/Filter/AtTopBot/Basic.lean Mathlib/Tactic.lean
+lake exe cache get Mathlib.Analysis.SpecialFunctions.Pow.Real \
+  Mathlib.Topology.Algebra.InfiniteSum.Real \
+  Mathlib.Order.Filter.AtTopBot.Basic Mathlib.Tactic
 lake build Statement
 lake env lean -DwarningAsError=true Validation.lean
