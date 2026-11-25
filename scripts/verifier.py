@@ -106,22 +106,156 @@ def clone(url, sha, dest, label, sparse_paths=None):
         raise ValueError('fetched commit does not match the requested pin')
 
 
-def strip_comments(text):
-    """Lean nested block comments and line comments, preserving newlines."""
-    out, depth, i = [], 0, 0
-    while i < len(text):
-        if text.startswith('/-', i):
-            depth += 1; out.append('  '); i += 2
-        elif depth and text.startswith('-/', i):
-            depth -= 1; out.append('  '); i += 2
-        elif not depth and text.startswith('--', i):
+_HEADER_PROLOGUE = frozenset({'prelude', 'module'})
+_HEADER_MODS = frozenset({'public', 'private', 'meta'})
+_HEADER_KEYWORDS = _HEADER_PROLOGUE | _HEADER_MODS | frozenset({'import'})
+_AXIOM_NONE_RE = re.compile(r"^'([A-Za-z_][A-Za-z0-9_.]*)' does not depend on any axioms$")
+_AXIOM_LIST_RE = re.compile(r"^'([A-Za-z_][A-Za-z0-9_.]*)' depends on axioms: \[([^\]]*)\]$")
+
+
+def _next_header_token(text, i, line_no):
+    """Read the next whitespace/comment/guillemet-separated header token and its line."""
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch.isspace():
+            if ch == '\n':
+                line_no += 1
+            i += 1
+        elif text.startswith('--', i):
             end = text.find('\n', i)
-            i = len(text) if end < 0 else end
+            i = n if end < 0 else end
+        elif text.startswith('/-', i):
+            depth = 1
+            i += 2
+            while i < n and depth > 0:
+                if text.startswith('/-', i):
+                    depth += 1
+                    i += 2
+                elif text.startswith('-/', i):
+                    depth -= 1
+                    i += 2
+                else:
+                    if text[i] == '\n':
+                        line_no += 1
+                    i += 1
+            if depth:
+                raise ValueError('unclosed block comment in source')
         else:
-            out.append(text[i] if not depth or text[i] == '\n' else ' '); i += 1
-    if depth:
-        raise ValueError('unclosed block comment in source')
-    return ''.join(out)
+            break
+    if i >= n:
+        return None, i, line_no, line_no
+    tok_line = line_no
+    if text[i] == '«':
+        end = text.find('»', i + 1)
+        if end < 0:
+            raise ValueError('unclosed guillemet identifier in source')
+        end_line = line_no + text.count('\n', i, end + 1)
+        return text[i:end + 1], end + 1, tok_line, end_line
+    start = i
+    while (
+        i < n
+        and not text[i].isspace()
+        and text[i] not in '«»'
+        and not text.startswith('--', i)
+        and not text.startswith('/-', i)
+    ):
+        i += 1
+    if i == start:
+        return text[i], i + 1, tok_line, tok_line
+    return text[start:i], i, tok_line, tok_line
+
+
+def parse_imports(text):
+    """Parse Lean import headers only, stopping at the first non-header token."""
+    text = text.lstrip('\ufeff')
+    imports = []
+    seen_import = False
+    pending_mod = False
+    await_target = False
+    seen_all = False
+    in_import_line = False
+    import_line = 0
+    i, line_no = 0, 1
+    while True:
+        tok, i, tok_line, line_no = _next_header_token(text, i, line_no)
+        if tok is None:
+            break
+        if in_import_line and tok_line != import_line:
+            in_import_line = False
+        if await_target:
+            if not seen_all and tok == 'all':
+                seen_all = True
+                continue
+            if tok == 'all' or tok in _HEADER_KEYWORDS or not NAME.fullmatch(tok):
+                raise ValueError('unsupported import header')
+            imports.append(tok)
+            await_target = False
+            seen_all = False
+            in_import_line = True
+            import_line = tok_line
+            continue
+        if tok == 'import':
+            in_import_line = False
+            pending_mod = False
+            seen_import = True
+            await_target = True
+            seen_all = False
+            continue
+        if tok in _HEADER_MODS:
+            in_import_line = False
+            pending_mod = True
+            continue
+        if tok in _HEADER_PROLOGUE:
+            if seen_import or pending_mod:
+                if in_import_line:
+                    raise ValueError('unsupported import header')
+                break
+            continue
+        if in_import_line:
+            if not NAME.fullmatch(tok):
+                raise ValueError('unsupported import header')
+            imports.append(tok)
+            continue
+        break
+    if await_target:
+        raise ValueError('unsupported import header')
+    return imports
+
+
+def parse_axiom_audit(text, theorem_names, permitted=AXIOMS):
+    """Strictly parse AuditAxioms output: 1:1 unindented lines, allowing 0-axiom theorems."""
+    expected = set(theorem_names)
+    allowed = set(permitted)
+    reported = {}
+    valid = True
+    for line in text.splitlines():
+        if not line:
+            continue
+        m_none = _AXIOM_NONE_RE.fullmatch(line)
+        if m_none:
+            name, axioms = m_none.group(1), []
+        else:
+            m_list = _AXIOM_LIST_RE.fullmatch(line)
+            if not m_list:
+                valid = False
+                continue
+            name = m_list.group(1)
+            raw_items = m_list.group(2)
+            if not raw_items or raw_items != raw_items.strip():
+                valid = False
+                continue
+            axioms = raw_items.split(', ')
+            if any(not NAME.fullmatch(x) for x in axioms):
+                valid = False
+                continue
+        if name not in expected or name in reported:
+            valid = False
+            continue
+        reported[name] = axioms
+    if set(reported) != expected or any(set(v) - allowed for v in reported.values()):
+        valid = False
+    return reported, valid
 
 
 def plan_sources(stage, root):
@@ -137,20 +271,10 @@ def plan_sources(stage, root):
             return set()  # fixed external package (checked by Lake)
         visiting.add(module)
         deps = set()
-        for line in strip_comments(path.read_text()).splitlines():
-            s = line.strip()
-            if not s or s in ['prelude', 'module']:
-                continue
-            header = re.fullmatch(r'(?:(?:public|private|meta)\s+)*import\s+(.+)', s)
-            if not header:
-                break
-            imports = header[1].split()
-            if not imports or any(not NAME.fullmatch(n) for n in imports):
-                raise ValueError('unsupported import header')
-            for name in imports:
-                if name.startswith('VerifierChallenge') or name.startswith('VerifierAudit'):
-                    raise ValueError('submission imports a reserved verifier module')
-                deps.add(name); deps.update(visit(name))
+        for name in parse_imports(path.read_text()):
+            if name.startswith('VerifierChallenge') or name.startswith('VerifierAudit'):
+                raise ValueError('submission imports a reserved verifier module')
+            deps.add(name); deps.update(visit(name))
         visiting.remove(module); done.add(module); closures[module] = deps; order.append(module)
         return deps
     visit(root)
@@ -269,14 +393,13 @@ def prepare():
     else:
         shutil.copyfile(ROOT / profile['challenge_file'], stage / 'VerifierChallenge.lean')
     data = receipt(); data['generated_challenge_sha256'] = digest(stage / 'VerifierChallenge.lean'); save(data)
-    (stage / 'VerifierAudit.lean').write_text('import ' + profile['solution_module'] + '\n' +
-                                           ''.join('#print axioms ' + n + '\n' for n in names))
-    (stage / 'lakefile.toml').write_text(lakefile(profile['source_roots'] + [root for dep in dependencies for root in dep['source_roots']] + ['VerifierChallenge', 'VerifierAudit'], profile.get('manifest_file', 'profiles/lake-manifest.json')))
+    (stage / 'lakefile.toml').write_text(lakefile(profile['source_roots'] + [root for dep in dependencies for root in dep['source_roots']] + ['VerifierChallenge'], profile.get('manifest_file', 'profiles/lake-manifest.json')))
     (stage / 'lean-toolchain').write_text(request['lean_toolchain'] + '\n')
     shutil.copyfile(ROOT / profile.get('manifest_file', 'profiles/lake-manifest.json'), stage / 'lake-manifest.json')
     (stage / '.lake/build').mkdir(parents=True); (stage / '.lake/packages').mkdir()
     (stage / '.lake/config').mkdir()
-    (WORK / 'scratch').mkdir()
+    (WORK / 'build-setup').mkdir(exist_ok=False)
+    (WORK / 'scratch-setup').mkdir(exist_ok=False)
     for kernel in ['lean', 'nanoda']:
         write_json(WORK / f'control/{kernel}.json', {'challenge_module': 'VerifierChallenge',
                    'solution_module': profile['solution_module'], 'theorem_names': names,
@@ -350,13 +473,15 @@ def setup():
              '-DSOLUTION_MODULE=' + json.dumps(profile['solution_module']),
              ROOT / 'scripts/lake-shim.c', '-o', bin_dir / 'lake'], 'build-lake-adapter')
     shutil.copyfile(ROOT / 'scripts/inside.py', WORK / 'control/inside.py')
+    shutil.copyfile(ROOT / 'scripts/AuditAxioms.lean', WORK / 'control/AuditAxioms.lean')
     binaries = {'lean': lean / 'lean', 'comparator': tools / 'comparator/.lake/build/bin/comparator',
                 'lean4export': exporter / '.lake/build/bin/lean4export',
                 'nanoda': tools / 'nanoda/target/release/nanoda_bin', 'landrun': tools / 'landrun/landrun'}
     write_json(ART / 'tool-sha256.json', {name: digest(path) for name, path in binaries.items()})
     # Compile only our Lake configuration before making its cache immutable.
     # `lean --version` elaborates no submission source. This stays offline.
-    command(sandbox_args(config_write=True) + [str(lean / 'lake'), 'env', 'lean', '--version'],
+    command(sandbox_args(config_write=True, build_dir=WORK / 'build-setup',
+                         scratch_dir=WORK / 'scratch-setup') + [str(lean / 'lake'), 'env', 'lean', '--version'],
             'trusted-lake-config')
     data = receipt(); data['tool_pins'] = pins; data['status'] = 'tools_ready'; save(data)
 
@@ -366,18 +491,21 @@ def toolchain_dir():
     return WORK / 'tools/elan/toolchains' / request['lean_toolchain'].replace('/', '--').replace(':', '---')
 
 
-def sandbox_args(config_write=False):
+def sandbox_args(config_write=False, build_dir=None, build_ro=False, scratch_dir=None):
     tools, stage, control = WORK / 'tools', WORK / 'stage', WORK / 'control'
     lean = toolchain_dir()
+    build_src = build_dir if build_dir is not None else (WORK / 'build-lean')
+    scratch_src = scratch_dir if scratch_dir is not None else (WORK / 'scratch-setup')
+    build_flag = '--ro-bind' if build_ro else '--bind'
     args = ['/usr/bin/bwrap', '--unshare-all', '--die-with-parent', '--new-session',
             '--ro-bind', '/usr', '/usr', '--symlink', 'usr/bin', '/bin',
             '--symlink', 'usr/lib', '/lib', '--symlink', 'usr/lib64', '/lib64',
             '--ro-bind', '/etc/ld.so.cache', '/etc/ld.so.cache',
             '--proc', '/proc', '--dev', '/dev', '--ro-bind', str(stage), str(stage),
-            '--bind', str(stage / '.lake/build'), str(stage / '.lake/build'),
+            build_flag, str(build_src), str(stage / '.lake/build'),
             '--ro-bind', str(WORK / 'cache/.lake/packages'), str(stage / '.lake/packages'),
             '--ro-bind', str(tools), str(tools), '--ro-bind', str(control), str(control),
-            '--bind', str(WORK / 'scratch'), '/tmp', '--chdir', str(stage), '--clearenv']
+            '--bind', str(scratch_src), '/tmp', '--chdir', str(stage), '--clearenv']
     if config_write:
         args += ['--bind', str(stage / '.lake/config'), str(stage / '.lake/config')]
     if Path('/etc/alternatives/which').exists():
@@ -403,6 +531,21 @@ def prepare_nanoda_swap():
     command(['sudo', 'swapon', swap], 'nanoda-swap-enable')
 
 
+def _phase_dirs(kernel):
+    if kernel == 'audit':
+        phase_build = WORK / 'build-lean'
+        if not phase_build.is_dir():
+            raise FileNotFoundError('missing lean build directory for audit')
+    elif kernel in ['lean', 'nanoda']:
+        phase_build = WORK / f'build-{kernel}'
+        phase_build.mkdir(exist_ok=False)
+    else:
+        raise ValueError(f'unknown verification phase: {kernel}')
+    phase_scratch = WORK / f'scratch-{kernel}'
+    phase_scratch.mkdir(exist_ok=False)
+    return phase_build, phase_scratch
+
+
 def verify(kernels=None):
     # Probe real namespace separation and read-only mounts before loading submission code.
     probe = '''import os, pathlib, sys
@@ -421,13 +564,17 @@ for path in sys.argv[4:]:
     raise AssertionError('read-only mount allowed a write')
 print('Network/process namespaces, credential visibility, and read-only mounts passed')
 '''
-    command(sandbox_args() + ['/usr/bin/python3', '-c', probe,
+    phases = list(kernels or ['lean', 'audit', 'nanoda'])
+    preflight_scratch = WORK / ('scratch-preflight-' + '-'.join(phases))
+    preflight_scratch.mkdir(exist_ok=False)
+    command(sandbox_args(build_dir=WORK / 'build-setup', build_ro=True,
+                         scratch_dir=preflight_scratch) + ['/usr/bin/python3', '-c', probe,
             os.readlink('/proc/self/ns/net'), os.readlink('/proc/self/ns/pid'),
             str(ROOT / '.git/config'), str(WORK / 'stage/lakefile.toml'),
             str(WORK / 'stage/.lake/packages/mathlib/lean-toolchain')], 'sandbox-preflight')
     # No submission elaboration has run before Comparator exports the trusted challenge.
     deadline = receipt()['started_unix'] + 320 * 60
-    for kernel in kernels or ['lean', 'audit', 'nanoda']:
+    for kernel in phases:
         data = receipt()
         if time.time() >= deadline:
             data['status'] = 'timeout'
@@ -439,7 +586,12 @@ print('Network/process namespaces, credential visibility, and read-only mounts p
         swap_limit = 16 * 1024**3 if kernel == 'nanoda' else 0
         unit = 'bos-verifier-' + kernel
         remaining = max(1, int(deadline - time.time()))
-        command_args = sandbox_args() + ['/usr/bin/python3', str(WORK / 'control/inside.py'), str(WORK), kernel]
+        phase_build, phase_scratch = _phase_dirs(kernel)
+        command_args = sandbox_args(
+            build_dir=phase_build,
+            build_ro=(kernel == 'audit'),
+            scratch_dir=phase_scratch,
+        ) + ['/usr/bin/python3', str(WORK / 'control/inside.py'), str(WORK), kernel]
         args = ['sudo', 'systemd-run', '--wait', '--pipe', '--unit=' + unit,
                 '--uid=' + str(os.getuid()), '--gid=' + str(os.getgid()),
                 '--property=RestrictAddressFamilies=~AF_UNIX', '--property=Nice=10',
@@ -472,13 +624,9 @@ print('Network/process namespaces, credential visibility, and read-only mounts p
             record.update(kernel_outcome(kernel, code, text, systemd_result, guard_stop))
             data = receipt(); data['kernels'][kernel] = record
         else:
-            reported = {}
-            for name in data['theorem_names']:
-                hits = re.findall(re.escape("'" + name + "' depends on axioms: [") + r'([^\]]*)\]', text)
-                if hits: reported[name] = [x.strip() for x in hits[-1].split(',') if x.strip()]
+            reported, audit_ok = parse_axiom_audit(text, data['theorem_names'])
             record['reported_axioms'] = reported
-            if code == 0 and (set(reported) != set(data['theorem_names']) or
-                             any(set(v) - set(AXIOMS) for v in reported.values())):
+            if code == 0 and not audit_ok:
                 record['status'] = 'invalid_output'
             data = receipt(); data['axiom_audit'] = record
         save(data)
