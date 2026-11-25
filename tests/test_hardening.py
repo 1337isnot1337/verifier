@@ -140,6 +140,90 @@ class IsolationHardeningTests(unittest.TestCase):
         self.assertEqual(captured['argv'][1:5], ['--run', str(work / 'control/AuditAxioms.lean'), 'Submission', 'Race.bound'])
         self.assertEqual(captured['env']['LEAN_PATH'].split(':')[0], tc_lib)
 
+    def test_verify_wires_ro_audit_mount_quiet_systemd_run_and_systemd_log_parsing(self):
+        def _run_verify(audit_log_text):
+            tmp = tempfile.TemporaryDirectory()
+            self.addCleanup(tmp.cleanup)
+            work = Path(tmp.name) / 'work'
+            art = Path(tmp.name) / 'art'
+            (work / 'control').mkdir(parents=True)
+            art.mkdir(parents=True)
+            (work / 'control/request.json').write_text(json.dumps({
+                'request': {'lean_toolchain': 'leanprover/lean4:v4.34.1'},
+                'profile': {'solution_module': 'Submission'},
+                'names': ['Race.bound'],
+            }))
+            (art / 'receipt.json').write_text(json.dumps({
+                'started_unix': int(v.time.time()),
+                'theorem_names': ['Race.bound'],
+                'kernels': {},
+                'steps': [],
+            }))
+            popen_calls = []
+
+            class _FakeProc:
+                def __init__(self, args, stdout):
+                    popen_calls.append(list(args))
+                    kernel = args[-1]
+                    if kernel == 'lean':
+                        stdout.write(
+                            'Lean default kernel accepts the solution\n'
+                            'Your solution is okay!\n'
+                        )
+                    elif kernel == 'audit':
+                        stdout.write(audit_log_text)
+                    stdout.flush()
+
+                def poll(self):
+                    return 0
+
+                def wait(self):
+                    return 0
+
+            def _fake_run(args, **_kw):
+                return mock.Mock(returncode=0, stdout='success\n')
+
+            with mock.patch.object(v, 'WORK', work), \
+                    mock.patch.object(v, 'ART', art), \
+                    mock.patch.object(v, 'command', return_value=None), \
+                    mock.patch.object(v.subprocess, 'Popen', side_effect=lambda args, stdout=None, **_kw: _FakeProc(args, stdout)), \
+                    mock.patch.object(v.subprocess, 'run', side_effect=_fake_run):
+                v.verify(['lean', 'audit'])
+            return work, json.loads((art / 'receipt.json').read_text()), popen_calls
+
+        systemd_wrapped_ok = (
+            'Running as unit: bos-verifier-audit.service; invocation ID: 0123456789abcdef0123456789abcdef\n'
+            "'Race.bound' does not depend on any axioms\n"
+            'Finished with result: success\n'
+            'Main processes terminated with: code=exited, status=0/SUCCESS\n'
+            'Service runtime: 1.234s\n'
+            'Memory peak: 42.1M (swap: 0B)\n'
+            'CPU time consumed: 980ms\n'
+        )
+        work, rec_ok, calls = _run_verify(systemd_wrapped_ok)
+        self.assertEqual(len(calls), 2)
+        stage_build = str(work / 'stage/.lake/build')
+        lean_cmd, audit_cmd = calls
+        for cmd in (lean_cmd, audit_cmd):
+            self.assertEqual(cmd[:5], ['sudo', 'systemd-run', '--quiet', '--wait', '--pipe'])
+        idx_lean = lean_cmd.index(stage_build)
+        self.assertEqual(lean_cmd[idx_lean - 2:idx_lean + 1], ['--bind', str(work / 'build-lean'), stage_build])
+        idx_audit = audit_cmd.index(stage_build)
+        self.assertEqual(audit_cmd[idx_audit - 2:idx_audit + 1], ['--ro-bind', str(work / 'build-lean'), stage_build])
+        self.assertEqual(rec_ok['status'], 'passed')
+        self.assertEqual(rec_ok['axiom_audit']['status'], 'passed')
+        self.assertEqual(rec_ok['axiom_audit']['reported_axioms'], {'Race.bound': []})
+
+        systemd_wrapped_warn = (
+            'Running as unit: bos-verifier-audit.service; invocation ID: 0123456789abcdef0123456789abcdef\n'
+            "warning: declaration uses 'sorry'\n"
+            "'Race.bound' does not depend on any axioms\n"
+            'Finished with result: success\n'
+        )
+        _work2, rec_bad, _calls2 = _run_verify(systemd_wrapped_warn)
+        self.assertEqual(rec_bad['axiom_audit']['status'], 'invalid_output')
+        self.assertEqual(rec_bad['status'], 'not_verified')
+
 
 class AxiomAuditHardeningTests(unittest.TestCase):
     def test_zero_axiom_theorem_accepted_and_admitted(self):
@@ -217,6 +301,67 @@ class AxiomAuditHardeningTests(unittest.TestCase):
             with self.subTest(out=out):
                 _rep, ok = v.parse_axiom_audit(out, ['Race.bound'])
                 self.assertFalse(ok)
+
+    def test_systemd_run_status_lines_accepted_while_non_success_and_spoofs_rejected(self):
+        v255_zero = (
+            'Running as unit: bos-verifier-audit.service; invocation ID: 0123456789abcdef0123456789abcdef\n'
+            "'Race.bound' does not depend on any axioms\n"
+            'Finished with result: success\n'
+            'Main processes terminated with: code=exited, status=0/SUCCESS\n'
+            'Service runtime: 1.234s\n'
+            'Memory peak: 42.1M (swap: 0B)\n'
+            'CPU time consumed: 980ms\n'
+        )
+        reported, ok = v.parse_axiom_audit(v255_zero, ['Race.bound'])
+        self.assertTrue(ok)
+        self.assertEqual(reported, {'Race.bound': []})
+
+        v252_std = (
+            'Running as unit: bos-verifier-audit.service\n'
+            "'Race.bound' depends on axioms: [Classical.choice, propext]\n"
+            'Finished with result: success\n'
+            'Main processes terminated with: code=exited/status=0\n'
+            'Service runtime: 1min 2.345s\n'
+            'Memory peak: 12.3M\n'
+            'Memory swap peak: 4.0K\n'
+            'CPU time consumed: 85ms\n'
+            'IP traffic received: 0B/sent: 0B\n'
+            'IO bytes read: 0B/written: 0B\n'
+        )
+        reported2, ok2 = v.parse_axiom_audit(v252_std, ['Race.bound'])
+        self.assertTrue(ok2)
+        self.assertEqual(reported2, {'Race.bound': ['Classical.choice', 'propext']})
+
+        bad_systemd_logs = [
+            (
+                'Running as unit: bos-verifier-audit.service\n'
+                'Finished with result: success\n'
+            ),
+            (
+                'Running as unit: bos-verifier-audit.service\n'
+                "'Race.bound' does not depend on any axioms\n"
+                'Finished with result: exit-code\n'
+            ),
+            (
+                'Running as unit: bos-verifier-audit.service\n'
+                "'Race.bound' does not depend on any axioms\n"
+                'Main processes terminated with: code=exited, status=1/FAILURE\n'
+            ),
+            (
+                '  Running as unit: bos-verifier-audit.service\n'
+                "'Race.bound' does not depend on any axioms\n"
+            ),
+            (
+                'Running as unit: bos-verifier-audit.service\n'
+                "warning: declaration uses 'sorry'\n"
+                "'Race.bound' does not depend on any axioms\n"
+                'Finished with result: success\n'
+            ),
+        ]
+        for out in bad_systemd_logs:
+            with self.subTest(out=out):
+                _rep, bad_ok = v.parse_axiom_audit(out, ['Race.bound'])
+                self.assertFalse(bad_ok)
 
 
 class LexerAndImportHardeningTests(unittest.TestCase):

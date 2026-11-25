@@ -111,6 +111,16 @@ _HEADER_MODS = frozenset({'public', 'private', 'meta'})
 _HEADER_KEYWORDS = _HEADER_PROLOGUE | _HEADER_MODS | frozenset({'import'})
 _AXIOM_NONE_RE = re.compile(r"^'([A-Za-z_][A-Za-z0-9_.]*)' does not depend on any axioms$")
 _AXIOM_LIST_RE = re.compile(r"^'([A-Za-z_][A-Za-z0-9_.]*)' depends on axioms: \[([^\]]*)\]$")
+_SYSTEMD_RUN_STATUS_RE = re.compile(
+    r'^(?:'
+    r'Running as unit: [A-Za-z0-9_.@-]+\.service(?:; invocation ID: [0-9a-f]+)?'
+    r'|Finished with result: success'
+    r'|Main processes terminated with: code=exited(?:, status=0(?:/SUCCESS)?|/status=0)'
+    r'|(?:Service runtime|CPU time consumed): [0-9A-Za-z.]+(?: [0-9A-Za-z.]+)*'
+    r'|Memory(?: swap)? peak: [0-9A-Za-z.()/:]+(?: [0-9A-Za-z.()/:]+)*'
+    r'|(?:IP traffic received|IO bytes read): [0-9A-Za-z./:]+(?: [0-9A-Za-z./:]+)*'
+    r')\Z'
+)
 
 
 def _next_header_token(text, i, line_no):
@@ -230,7 +240,7 @@ def parse_axiom_audit(text, theorem_names, permitted=AXIOMS):
     reported = {}
     valid = True
     for line in text.splitlines():
-        if not line:
+        if not line or _SYSTEMD_RUN_STATUS_RE.fullmatch(line):
             continue
         m_none = _AXIOM_NONE_RE.fullmatch(line)
         if m_none:
@@ -592,7 +602,7 @@ print('Network/process namespaces, credential visibility, and read-only mounts p
             build_ro=(kernel == 'audit'),
             scratch_dir=phase_scratch,
         ) + ['/usr/bin/python3', str(WORK / 'control/inside.py'), str(WORK), kernel]
-        args = ['sudo', 'systemd-run', '--wait', '--pipe', '--unit=' + unit,
+        args = ['sudo', 'systemd-run', '--quiet', '--wait', '--pipe', '--unit=' + unit,
                 '--uid=' + str(os.getuid()), '--gid=' + str(os.getgid()),
                 '--property=RestrictAddressFamilies=~AF_UNIX', '--property=Nice=10',
                 '--property=CPUQuota=400%', '--property=MemoryMax=14G', '--property=MemorySwapMax=' + str(swap_limit),
