@@ -61,6 +61,72 @@ class IsolationHardeningTests(unittest.TestCase):
         self.assertIn(str(work / 'scratch-audit'), audit_args)
         self.assertIn(str(work / 'scratch-nanoda'), nanoda_args)
 
+    def test_default_sandbox_args_uses_prepare_created_dirs_for_dependency_check(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        work = Path(tmp.name) / 'work'
+        art = Path(tmp.name) / 'art'
+        src_repo = Path(tmp.name) / 'src_repo'
+        src_repo.mkdir(parents=True)
+        (src_repo / 'Submission.lean').write_text('theorem bound : 1 = 1 := rfl\n', encoding='utf-8')
+        req_file = Path(tmp.name) / 'request.json'
+        req_file.write_text(json.dumps({
+            'test_only': True,
+            'inputs': {
+                'repo_url': 'https://github.com/openai/math',
+                'commit': 'fd4aeeb2ee4fc729c18d98444fed42fd0529eeeb',
+                'challenge_file': 'challenges/matrix-multiplication/MatrixMultiplication.lean',
+                'theorem_names': 'OAI.MatrixMultiplication.complex_omega_le_nine_quarters',
+                'lean_toolchain': 'leanprover/lean4:v4.34.1',
+            },
+        }), encoding='utf-8')
+
+        def _fake_clone(_url, _sha, dest, label, **_kw):
+            files = (
+                {'lean/OAI/LinearAlgebra/MatrixMultiplication/Main.lean': 'import FixedPointTheorems.brouwer\n'}
+                if label == 'submission'
+                else {'FixedPointTheorems/brouwer.lean': 'import Mathlib\n'}
+            )
+            for rel, content in files.items():
+                p = dest / rel
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(content, encoding='utf-8')
+
+        def _fake_check_output(cmd, **_kw):
+            loc = Path(cmd[2])
+            entries = []
+            for p in sorted(loc.rglob('*.lean')):
+                rel = p.relative_to(loc).as_posix().encode('utf-8')
+                entries.append(b'100644 blob deadbeef\t' + rel)
+            return b'\0'.join(entries) + b'\0'
+
+        with mock.patch.object(v, 'WORK', work), \
+                mock.patch.object(v, 'ART', art), \
+                mock.patch.dict('os.environ', {'BOS_REQUEST_PATH': str(req_file)}, clear=False), \
+                mock.patch.object(v, 'clone', side_effect=_fake_clone), \
+                mock.patch.object(v, 'command', return_value=None), \
+                mock.patch.object(v.subprocess, 'check_output', side_effect=_fake_check_output):
+            v.prepare()
+            (work / 'cache/.lake/packages').mkdir(parents=True, exist_ok=True)
+            default_args = v.sandbox_args()
+
+        self.assertTrue((work / 'build-setup').is_dir())
+        self.assertTrue((work / 'scratch-setup').is_dir())
+        self.assertFalse((work / 'build-lean').exists())
+        stage_build = str(work / 'stage/.lake/build')
+        idx_default = default_args.index(stage_build)
+        self.assertEqual(
+            default_args[idx_default - 2:idx_default + 1],
+            ['--bind', str(work / 'build-setup'), stage_build],
+        )
+        self.assertNotIn(str(work / 'build-lean'), default_args)
+        # Every WORK-rooted source path bound by default sandbox_args() must exist after prepare() + cache init
+        for i, tok in enumerate(default_args):
+            if tok in ('--bind', '--ro-bind'):
+                src_path = Path(default_args[i + 1])
+                if src_path.is_relative_to(work):
+                    self.assertTrue(src_path.exists(), f'missing sandbox bind source: {src_path}')
+
     def test_prioritize_toolchain_lean_path_blocks_stdlib_shadowing(self):
         inside = _load_module('inside_hardening_sut', 'scripts/inside.py')
         tc_lib = '/work/tools/elan/toolchains/lean4/lib/lean'
@@ -195,9 +261,10 @@ class IsolationHardeningTests(unittest.TestCase):
             'Running as unit: bos-verifier-audit.service; invocation ID: 0123456789abcdef0123456789abcdef\n'
             "'Race.bound' does not depend on any axioms\n"
             'Finished with result: success\n'
-            'Main processes terminated with: code=exited, status=0/SUCCESS\n'
+            'Main processes terminated with: code=exited/status=0\n'
             'Service runtime: 1.234s\n'
-            'Memory peak: 42.1M (swap: 0B)\n'
+            'Memory peak: 42.1M\n'
+            'Memory swap peak: 0B\n'
             'CPU time consumed: 980ms\n'
         )
         work, rec_ok, calls = _run_verify(systemd_wrapped_ok)
@@ -307,9 +374,10 @@ class AxiomAuditHardeningTests(unittest.TestCase):
             'Running as unit: bos-verifier-audit.service; invocation ID: 0123456789abcdef0123456789abcdef\n'
             "'Race.bound' does not depend on any axioms\n"
             'Finished with result: success\n'
-            'Main processes terminated with: code=exited, status=0/SUCCESS\n'
+            'Main processes terminated with: code=exited/status=0\n'
             'Service runtime: 1.234s\n'
-            'Memory peak: 42.1M (swap: 0B)\n'
+            'Memory peak: 42.1M\n'
+            'Memory swap peak: 0B\n'
             'CPU time consumed: 980ms\n'
         )
         reported, ok = v.parse_axiom_audit(v255_zero, ['Race.bound'])
@@ -325,8 +393,10 @@ class AxiomAuditHardeningTests(unittest.TestCase):
             'Memory peak: 12.3M\n'
             'Memory swap peak: 4.0K\n'
             'CPU time consumed: 85ms\n'
-            'IP traffic received: 0B/sent: 0B\n'
-            'IO bytes read: 0B/written: 0B\n'
+            'IP traffic received: 0B\n'
+            'IP traffic sent: 0B\n'
+            'IO bytes read: 0B\n'
+            'IO bytes written: 0B\n'
         )
         reported2, ok2 = v.parse_axiom_audit(v252_std, ['Race.bound'])
         self.assertTrue(ok2)
@@ -345,7 +415,27 @@ class AxiomAuditHardeningTests(unittest.TestCase):
             (
                 'Running as unit: bos-verifier-audit.service\n'
                 "'Race.bound' does not depend on any axioms\n"
-                'Main processes terminated with: code=exited, status=1/FAILURE\n'
+                'Finished with result: timeout\n'
+            ),
+            (
+                'Running as unit: bos-verifier-audit.service\n'
+                "'Race.bound' does not depend on any axioms\n"
+                'Finished with result: signal\n'
+            ),
+            (
+                'Running as unit: bos-verifier-audit.service\n'
+                "'Race.bound' does not depend on any axioms\n"
+                'Finished with result: resources\n'
+            ),
+            (
+                'Running as unit: bos-verifier-audit.service\n'
+                "'Race.bound' does not depend on any axioms\n"
+                'Main processes terminated with: code=exited/status=1\n'
+            ),
+            (
+                'Running as unit: bos-verifier-audit.service\n'
+                "'Race.bound' does not depend on any axioms\n"
+                'Main processes terminated with: code=killed/status=KILL\n'
             ),
             (
                 '  Running as unit: bos-verifier-audit.service\n'

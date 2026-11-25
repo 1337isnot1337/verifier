@@ -115,10 +115,10 @@ _SYSTEMD_RUN_STATUS_RE = re.compile(
     r'^(?:'
     r'Running as unit: [A-Za-z0-9_.@-]+\.service(?:; invocation ID: [0-9a-f]+)?'
     r'|Finished with result: success'
-    r'|Main processes terminated with: code=exited(?:, status=0(?:/SUCCESS)?|/status=0)'
+    r'|Main processes terminated with: code=exited/status=0'
     r'|(?:Service runtime|CPU time consumed): [0-9A-Za-z.]+(?: [0-9A-Za-z.]+)*'
-    r'|Memory(?: swap)? peak: [0-9A-Za-z.()/:]+(?: [0-9A-Za-z.()/:]+)*'
-    r'|(?:IP traffic received|IO bytes read): [0-9A-Za-z./:]+(?: [0-9A-Za-z./:]+)*'
+    r'|Memory(?: swap)? peak: [0-9A-Za-z.]+(?: [0-9A-Za-z.]+)*'
+    r'|(?:IP traffic (?:received|sent)|IO bytes (?:read|written)): [0-9A-Za-z.]+(?: [0-9A-Za-z.]+)*'
     r')\Z'
 )
 
@@ -504,7 +504,7 @@ def toolchain_dir():
 def sandbox_args(config_write=False, build_dir=None, build_ro=False, scratch_dir=None):
     tools, stage, control = WORK / 'tools', WORK / 'stage', WORK / 'control'
     lean = toolchain_dir()
-    build_src = build_dir if build_dir is not None else (WORK / 'build-lean')
+    build_src = build_dir if build_dir is not None else (WORK / 'build-setup')
     scratch_src = scratch_dir if scratch_dir is not None else (WORK / 'scratch-setup')
     build_flag = '--ro-bind' if build_ro else '--bind'
     args = ['/usr/bin/bwrap', '--unshare-all', '--die-with-parent', '--new-session',
